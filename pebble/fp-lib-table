@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "kicad-symbols")(type "KiCad")(uri "/Users/yatekii/repos/kicad-symbols/kicad-symbols.pretty")(options "")(descr ""))
+)
