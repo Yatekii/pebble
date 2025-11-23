@@ -1800,6 +1800,183 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Switch:SW_Reed"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "SW"
+				(at 0 2.54 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "SW_Reed"
+				(at 0 -2.54 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "reed switch"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "reed magnetic switch"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "SW_Reed_0_0"
+				(polyline
+					(pts
+						(xy -2.54 0) (xy 1.27 0.762)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -2.159 -1.397) (xy 2.286 -1.397)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start -2.159 -1.397)
+					(mid -3.55 0)
+					(end -2.159 1.397)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 2.159 1.397)
+					(mid 3.55 0)
+					(end 2.159 -1.397)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 2.159 1.397) (xy -2.159 1.397)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 2.54 0) (xy -1.27 -0.762)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "SW_Reed_1_1"
+				(pin passive line
+					(at -5.08 0 0)
+					(length 2.54)
+					(name "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 5.08 0 180)
+					(length 2.54)
+					(name "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "kicad-symbols:LPV521"
 			(pin_names
 				(offset 0.127)
@@ -3195,6 +3372,12 @@
 		(uuid "1da9a2e2-556c-4938-9d37-15739326b91d")
 	)
 	(junction
+		(at 187.96 100.33)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "20209ff3-cc6b-497e-b5c4-d45898ed71a0")
+	)
+	(junction
 		(at 96.52 49.53)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3217,6 +3400,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "2851e1d2-8faf-4695-98e0-0096a5705f22")
+	)
+	(junction
+		(at 187.96 105.41)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "3a1cf1f3-ed7c-4a89-812f-902e596e0cba")
 	)
 	(junction
 		(at 223.52 114.3)
@@ -3279,6 +3468,12 @@
 		(uuid "a5120efb-7976-48ac-9631-840e92390a37")
 	)
 	(junction
+		(at 187.96 97.79)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b544ab1a-3cba-414c-a1b3-cd8c52fc2946")
+	)
+	(junction
 		(at 100.33 125.73)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3295,6 +3490,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "bc0a53fa-d307-41aa-9493-d44eabcef7f9")
+	)
+	(junction
+		(at 187.96 92.71)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c8ef0595-922c-4028-be5e-8e2ca1ab467d")
 	)
 	(junction
 		(at 238.76 114.3)
@@ -3329,11 +3530,11 @@
 		(uuid "6c855918-38de-46d5-bd04-1c677ef322e7")
 	)
 	(no_connect
-		(at 189.23 115.57)
+		(at 187.96 127)
 		(uuid "db960806-1fd9-42e8-bea2-91c324dd8c61")
 	)
 	(no_connect
-		(at 189.23 107.95)
+		(at 187.96 119.38)
 		(uuid "e808f3fd-736b-431d-a8be-4d06682fe46c")
 	)
 	(wire
@@ -3398,16 +3599,6 @@
 	)
 	(wire
 		(pts
-			(xy 187.96 85.09) (xy 187.96 87.63)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "1558fcb4-d7a6-4d30-aa14-0724b721bce4")
-	)
-	(wire
-		(pts
 			(xy 119.38 62.23) (xy 114.3 62.23)
 		)
 		(stroke
@@ -3465,6 +3656,16 @@
 			(type default)
 		)
 		(uuid "24d18d81-d00d-48e5-8373-8a4ad6e77758")
+	)
+	(wire
+		(pts
+			(xy 187.96 85.09) (xy 187.96 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "294f17bf-6250-4523-a1fb-4f5645f6aeca")
 	)
 	(wire
 		(pts
@@ -3658,6 +3859,16 @@
 	)
 	(wire
 		(pts
+			(xy 187.96 92.71) (xy 198.12 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "64e3523f-df72-45b7-aaeb-a56540a0d978")
+	)
+	(wire
+		(pts
 			(xy 234.95 129.54) (xy 238.76 129.54)
 		)
 		(stroke
@@ -3705,6 +3916,16 @@
 			(type default)
 		)
 		(uuid "78472683-24c5-49cc-9003-f45c29f8fdcb")
+	)
+	(wire
+		(pts
+			(xy 187.96 105.41) (xy 187.96 106.68)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "85ecfd15-16e8-47d0-954c-0d3981ab52a8")
 	)
 	(wire
 		(pts
@@ -3828,6 +4049,16 @@
 	)
 	(wire
 		(pts
+			(xy 187.96 92.71) (xy 187.96 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ac38245f-0b3f-48e4-8792-bfc9595b032d")
+	)
+	(wire
+		(pts
 			(xy 187.96 67.31) (xy 204.47 67.31)
 		)
 		(stroke
@@ -3938,6 +4169,16 @@
 	)
 	(wire
 		(pts
+			(xy 198.12 104.14) (xy 198.12 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c8a2a589-5d54-449d-9190-70cf256da117")
+	)
+	(wire
+		(pts
 			(xy 96.52 49.53) (xy 105.41 49.53)
 		)
 		(stroke
@@ -3955,6 +4196,16 @@
 			(type default)
 		)
 		(uuid "ce4be97b-41b3-435a-9e50-c34ec49707ec")
+	)
+	(wire
+		(pts
+			(xy 198.12 92.71) (xy 198.12 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d6d29bf9-0f33-4b42-aa16-284eebe36c54")
 	)
 	(wire
 		(pts
@@ -4025,6 +4276,26 @@
 			(type default)
 		)
 		(uuid "efd0e748-35fa-4ac8-bcb7-77c7d5b37740")
+	)
+	(wire
+		(pts
+			(xy 187.96 100.33) (xy 187.96 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f0fb76f8-272c-4ed9-8b04-b01917da6bd2")
+	)
+	(wire
+		(pts
+			(xy 187.96 105.41) (xy 198.12 105.41)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f14c3491-6bd9-43a2-bde1-ab5ac9fa7456")
 	)
 	(wire
 		(pts
@@ -4116,7 +4387,7 @@
 		)
 		(uuid "ff68c1ea-ca13-4b2a-b941-e3b511fb003f")
 	)
-	(label "DN_in"
+	(label "DP_in"
 		(at 93.98 67.31 180)
 		(effects
 			(font
@@ -4156,7 +4427,7 @@
 		)
 		(uuid "5042f21f-44e5-4d8d-9aa4-43d9f2cf37ca")
 	)
-	(label "DP_in"
+	(label "DN_in"
 		(at 93.98 62.23 180)
 		(effects
 			(font
@@ -4486,7 +4757,7 @@
 	)
 	(symbol
 		(lib_id "Device:Battery_Cell")
-		(at 189.23 113.03 0)
+		(at 187.96 124.46 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -4494,7 +4765,7 @@
 		(dnp no)
 		(uuid "0b2011d8-b088-445e-b8bd-659b05830650")
 		(property "Reference" "BT1"
-			(at 191.77 113.03 0)
+			(at 190.5 124.46 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4503,7 +4774,7 @@
 			)
 		)
 		(property "Value" "104040"
-			(at 191.77 115.57 0)
+			(at 190.5 127 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4512,7 +4783,7 @@
 			)
 		)
 		(property "Footprint" "Connector_JST:JST_PH_S2B-PH-SM4-TB_1x02-1MP_P2.00mm_Horizontal"
-			(at 189.23 111.506 90)
+			(at 187.96 122.936 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4521,7 +4792,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 189.23 111.506 90)
+			(at 187.96 122.936 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4530,7 +4801,7 @@
 			)
 		)
 		(property "Description" "Single-cell battery"
-			(at 189.23 113.03 0)
+			(at 187.96 124.46 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5561,7 +5832,7 @@
 	)
 	(symbol
 		(lib_id "Connector:Conn_01x02_Pin")
-		(at 193.04 90.17 180)
+		(at 193.04 109.22 180)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -5569,7 +5840,7 @@
 		(dnp no)
 		(uuid "4925bd31-8f23-4e7d-8a41-3a104dd0fed3")
 		(property "Reference" "J4"
-			(at 196.469 90.17 0)
+			(at 196.469 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5577,7 +5848,7 @@
 			)
 		)
 		(property "Value" "BAT"
-			(at 195.58 87.884 0)
+			(at 195.58 106.934 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5585,7 +5856,7 @@
 			)
 		)
 		(property "Footprint" "Connector_PinHeader_1.27mm:PinHeader_1x02_P1.27mm_Vertical"
-			(at 193.04 90.17 0)
+			(at 193.04 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5594,7 +5865,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 193.04 90.17 0)
+			(at 193.04 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5603,7 +5874,7 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x02, script generated"
-			(at 193.04 90.17 0)
+			(at 193.04 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5825,16 +6096,15 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 187.96 90.17 0)
+		(at 187.96 109.22 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "5b970afe-6103-4c22-a72d-624d4260a0af")
 		(property "Reference" "#PWR0195"
-			(at 187.96 96.52 0)
+			(at 187.96 115.57 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5843,7 +6113,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 187.96 95.25 0)
+			(at 187.96 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5851,7 +6121,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 187.96 90.17 0)
+			(at 187.96 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5860,7 +6130,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 187.96 90.17 0)
+			(at 187.96 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5869,7 +6139,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 187.96 90.17 0)
+			(at 187.96 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6472,6 +6742,76 @@
 		)
 	)
 	(symbol
+		(lib_id "Switch:SW_Reed")
+		(at 198.12 99.06 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "686daf22-5be8-4b68-b093-ee4b34719faf")
+		(property "Reference" "SW1"
+			(at 200.66 97.7899 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "SW_Reed"
+			(at 200.66 100.3299 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "kicad-symbols:59170-1-S-00-D"
+			(at 198.12 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 198.12 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "reed switch"
+			(at 198.12 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "712c9488-7b8a-475d-80c4-66a4181906d7")
+		)
+		(pin "2"
+			(uuid "8afbb6f9-3ede-4686-a4a6-747ccf404768")
+		)
+		(instances
+			(project ""
+				(path "/c2e3895e-6d31-45cf-9c3f-1a5433b7d5ed/68e3a195-52b2-4db8-90fd-7c43f6c0fe7d"
+					(reference "SW1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "kicad-symbols:MAX77751xEFG+")
 		(at 142.24 69.85 0)
 		(unit 1)
@@ -6600,6 +6940,73 @@
 			(project ""
 				(path "/c2e3895e-6d31-45cf-9c3f-1a5433b7d5ed/68e3a195-52b2-4db8-90fd-7c43f6c0fe7d"
 					(reference "U7")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:Conn_01x02_Pin")
+		(at 193.04 100.33 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "71d7100c-cdd8-4faa-9bab-539b6de4fdf2")
+		(property "Reference" "J6"
+			(at 195.326 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "ON"
+			(at 195.58 98.044 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Connector_PinHeader_1.27mm:PinHeader_1x02_P1.27mm_Vertical"
+			(at 193.04 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 193.04 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Generic connector, single row, 01x02, script generated"
+			(at 193.04 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "d91a0227-3cba-471e-a867-4060eeac831e")
+		)
+		(pin "1"
+			(uuid "0b54497d-f42b-4faa-888a-88404db81400")
+		)
+		(instances
+			(project "pebble"
+				(path "/c2e3895e-6d31-45cf-9c3f-1a5433b7d5ed/68e3a195-52b2-4db8-90fd-7c43f6c0fe7d"
+					(reference "J6")
 					(unit 1)
 				)
 			)
@@ -9531,6 +9938,73 @@
 			(project "pebble"
 				(path "/c2e3895e-6d31-45cf-9c3f-1a5433b7d5ed/68e3a195-52b2-4db8-90fd-7c43f6c0fe7d"
 					(reference "#PWR0210")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:Conn_01x02_Pin")
+		(at 182.88 97.79 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ff2bf44c-1871-46ad-a527-fb4c004ec341")
+		(property "Reference" "J7"
+			(at 180.594 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "ON"
+			(at 180.34 100.076 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Connector_PinHeader_1.27mm:PinHeader_1x02_P1.27mm_Vertical"
+			(at 182.88 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 182.88 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Generic connector, single row, 01x02, script generated"
+			(at 182.88 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "aeb10504-6c0c-4846-b74f-ba1b43a3565f")
+		)
+		(pin "1"
+			(uuid "2c00a1a7-aa26-4ffe-ab6a-26ccb1fd87ae")
+		)
+		(instances
+			(project "pebble"
+				(path "/c2e3895e-6d31-45cf-9c3f-1a5433b7d5ed/68e3a195-52b2-4db8-90fd-7c43f6c0fe7d"
+					(reference "J7")
 					(unit 1)
 				)
 			)
