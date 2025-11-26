@@ -60,14 +60,6 @@
       ],
       "drc_exclusions": [
         [
-          "lib_footprint_mismatch|144700000|80851851|2f43a3ba-a385-4924-acc5-354907daf13f|00000000-0000-0000-0000-000000000000",
-          "required for working thermals"
-        ],
-        [
-          "lib_footprint_mismatch|149498600|86328600|1100f8f4-8b55-4d89-a19d-ba37c8e79c40|00000000-0000-0000-0000-000000000000",
-          "required to make planes work"
-        ],
-        [
           "starved_thermal|150575000|66655000|1f54bfbf-7291-42fa-87f4-e5864cae7d80|15d91eee-c460-448d-87e6-3e44438da515|F.Cu",
           "small cap, its ok"
         ]

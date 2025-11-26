@@ -5235,6 +5235,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C779403"
+			(at 231.14 95.25 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "4"
 			(uuid "60023dfe-d84f-4d16-87c7-f074b1bf67f9")
 		)
@@ -5745,7 +5754,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22u"
+		(property "Value" "22uF"
 			(at 208.28 73.66 0)
 			(effects
 				(font
@@ -5915,7 +5924,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10u"
+		(property "Value" "10uF"
 			(at 186.69 56.515 0)
 			(effects
 				(font
@@ -6796,6 +6805,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C315909"
+			(at 198.12 99.06 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "712c9488-7b8a-475d-80c4-66a4181906d7")
 		)
@@ -6856,6 +6874,15 @@
 			)
 		)
 		(property "Description" "3.15A USB Type-C Autonomous Charger for 1-Cell Li+ Batteries"
+			(at 142.24 69.85 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part #" "C2908590"
 			(at 142.24 69.85 0)
 			(effects
 				(font
@@ -7513,7 +7540,7 @@
 		(fields_autoplaced yes)
 		(uuid "91555c65-df52-4486-b1ab-5b435c8f50f1")
 		(property "Reference" "C24"
-			(at 168.91 73.025 0)
+			(at 168.91 72.3899 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7521,8 +7548,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "2.2u"
-			(at 168.91 75.565 0)
+		(property "Value" "2.2uF"
+			(at 168.91 74.9299 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7653,6 +7680,15 @@
 			)
 		)
 		(property "Description" ""
+			(at 100.33 125.73 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part #" "C2150885"
 			(at 100.33 125.73 0)
 			(effects
 				(font
@@ -7877,6 +7913,15 @@
 			)
 		)
 		(property "Description" "USB 2.0-only 16P Type-C Receptacle connector"
+			(at 69.85 64.77 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part #" "C2843970"
 			(at 69.85 64.77 0)
 			(effects
 				(font
@@ -8854,7 +8899,7 @@
 		(fields_autoplaced yes)
 		(uuid "ba98949f-8146-4f98-b6e5-bfe2b5d69c11")
 		(property "Reference" "C29"
-			(at 191.77 70.485 0)
+			(at 191.77 69.8499 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8862,8 +8907,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10u"
-			(at 191.77 73.025 0)
+		(property "Value" "10uF"
+			(at 191.77 72.3899 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9336,7 +9381,7 @@
 		(fields_autoplaced yes)
 		(uuid "df505ca2-7db5-448b-86ed-7391009c9e4d")
 		(property "Reference" "L4"
-			(at 172.085 62.865 0)
+			(at 171.45 62.2299 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9344,8 +9389,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "0.47u"
-			(at 172.085 65.405 0)
+		(property "Value" "0.47uH"
+			(at 171.45 64.7699 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9689,7 +9734,7 @@
 		(fields_autoplaced yes)
 		(uuid "ee4a1f60-af2c-46e4-944b-b5dcb48d7c1c")
 		(property "Reference" "C25"
-			(at 173.99 55.245 0)
+			(at 173.99 54.6099 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9697,8 +9742,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "100n"
-			(at 173.99 57.785 0)
+		(property "Value" "100nF"
+			(at 173.99 57.1499 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9784,7 +9829,7 @@
 		(fields_autoplaced yes)
 		(uuid "ee6714ad-0b84-47f6-af50-da2554ec2e34")
 		(property "Reference" "C27"
-			(at 181.61 70.485 0)
+			(at 181.61 69.8499 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9792,8 +9837,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10u"
-			(at 181.61 73.025 0)
+		(property "Value" "10uF"
+			(at 181.61 72.3899 0)
 			(effects
 				(font
 					(size 1.27 1.27)

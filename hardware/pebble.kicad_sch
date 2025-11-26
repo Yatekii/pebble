@@ -9392,6 +9392,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C22418213"
+			(at 410.21 118.11 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "1abdddf5-df08-4548-abb5-8300a45bc3d8")
 		)
@@ -14090,6 +14099,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C97253"
+			(at 140.97 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "4"
 			(uuid "84b69366-b1b5-4d4c-b829-d626787119e8")
 		)
@@ -17261,6 +17279,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C6898733"
+			(at 359.41 118.11 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "35d9dd68-3a63-4d99-aae8-613edd37c243")
 		)
@@ -17718,6 +17745,15 @@
 			)
 		)
 		(property "Description" ""
+			(at 54.61 41.91 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part #" "C919459"
 			(at 54.61 41.91 0)
 			(effects
 				(font
@@ -19477,6 +19513,15 @@
 		)
 		(property "Description" "RF Module, ESP32-C6 SoC, Wi-Fi 802.11b/g/n/ax, Bluetooth, BLE, Zigbee, Thread, 32-bit, 3.3V, SMD, onboard antenna"
 			(at 304.8 19.05 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part #" "C5736265"
+			(at 304.8 58.42 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -21857,6 +21902,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C965555"
+			(at 25.4 170.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "3"
 			(uuid "bb8a209f-ad60-4e40-a652-f56e105bb995")
 		)
@@ -23995,6 +24049,15 @@
 			)
 		)
 		(property "Description" ""
+			(at 355.6 224.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part #" "C2836813"
 			(at 355.6 224.79 0)
 			(effects
 				(font
@@ -26148,6 +26211,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C7420338"
+			(at 387.35 105.41 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "e8c73e7f-73ce-496c-bf72-e6eb0d837f2d")
 		)
@@ -26901,6 +26973,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part #" "C17225907"
+			(at 359.41 168.91 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "A2"
 			(uuid "66ea4a14-8a80-4687-bc53-62d53d80fbeb")
 		)
@@ -27481,6 +27562,15 @@
 		)
 		(property "Description" "-0.13A Id, -50V Vds, P-Channel MOSFET, SOT-23"
 			(at 383.54 90.17 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part # Part #" "C7420340"
+			(at 383.54 90.17 90)
 			(effects
 				(font
 					(size 1.27 1.27)

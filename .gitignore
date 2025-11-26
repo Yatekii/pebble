@@ -1,0 +1,7 @@
+**/pebble-backups/*
+#auto_saved_files#
+~pebble.kicad_pcb.lck
+~pebble.kicad_sch.lck
+_autosave-pebble*
+autosave-pebble*
+**/.DS_Store

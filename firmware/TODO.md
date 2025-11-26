@@ -1,0 +1,8 @@
+- [ ] Talk to the IMU and read sensor values via I2C
+  - [ ] Read the acc values (output should be x, y, z)
+  - [ ] Read the gyro values (output should be x, y, z)
+  - [ ] Read the compass values (output should be x, y, z)
+- [ ] Read the GPS position (output should be lat, lon)
+- [ ] Control the servo (input should be degrees)
+- [ ] Set an LED pattern (input should be a 72 slots wide array of color tuples (u8, u8, u8) - maybe there is a crate that can do dimmable colors already for this?)
+- [ ] Create a state that can be persisted to Flash. Create 3 dummy states A, B, C of the puzzle box progress so we can extend it later.
