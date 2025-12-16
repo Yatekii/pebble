@@ -12,9 +12,11 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
+use esp_hal::delay::Delay;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
+use pebble::hal::imu;
 use trouble_host::prelude::*;
 
 extern crate alloc;
@@ -50,6 +52,23 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
+    // Initialize IMU
+    let mut delay = Delay::new();
+    let mut imu = match imu::init(
+        peripherals.I2C0,
+        peripherals.GPIO2,
+        peripherals.GPIO3,
+        &mut delay,
+    ) {
+        Ok(imu) => {
+            info!("IMU initialized successfully");
+            imu
+        }
+        Err(e) => {
+            defmt::panic!("Failed to initialize IMU: {:?}", e);
+        }
+    };
+
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
     let (mut _wifi_controller, _interfaces) =
         esp_radio::wifi::new(&radio_init, peripherals.WIFI, Default::default())
@@ -65,8 +84,18 @@ async fn main(spawner: Spawner) -> ! {
     let _ = spawner;
 
     loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+        match imu.read() {
+            Ok(data) => {
+                info!(
+                    "IMU: acc=({}, {}, {}) gyr=({}, {}, {})",
+                    data.acc_x, data.acc_y, data.acc_z, data.gyr_x, data.gyr_y, data.gyr_z
+                );
+            }
+            Err(e) => {
+                info!("IMU read error: {:?}", e);
+            }
+        }
+        Timer::after(Duration::from_millis(100)).await;
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples

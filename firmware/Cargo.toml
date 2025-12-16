@@ -74,6 +74,9 @@ trouble-host = { version = "0.5.0", features = ["gatt"] }
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
 
+bmi2 = "0.1.1"
+embedded-hal = "1.0.0"
+
 [dev-dependencies]
 embedded-test = { version = "0.7.0", features = [
   "defmt",
