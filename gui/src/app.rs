@@ -11,11 +11,15 @@ use crate::data::ImuReading;
 
 actions!(imu_viewer, [Quit]);
 
+fn pulsating_easing(t: f32) -> f32 {
+    // Sine wave that goes 0 -> 1 -> 0
+    (t * std::f32::consts::PI).sin()
+}
+
 pub struct ImuViewerApp {
     focus_handle: FocusHandle,
     ble_state: Arc<Mutex<BleState>>,
     connection_state: ConnectionState,
-    use_dummy_data: bool,
 }
 
 impl ImuViewerApp {
@@ -25,19 +29,10 @@ impl ImuViewerApp {
         // Create shared BLE state
         let ble_state = Arc::new(Mutex::new(BleState::new()));
 
-        // Pre-fill with some initial data
-        {
-            let mut state = ble_state.lock();
-            for _ in 0..50 {
-                state.imu_history.generate_dummy_reading();
-            }
-        }
-
         // Start the BLE client
         let ble_rx = Arc::new(Mutex::new(start_ble_client(ble_state.clone())));
 
-        // Poll for BLE messages and generate dummy data
-        let ble_state_for_poll = ble_state.clone();
+        // Poll for BLE messages
         let ble_rx_for_poll = ble_rx.clone();
         cx.spawn(async move |this, cx| {
             loop {
@@ -52,15 +47,6 @@ impl ImuViewerApp {
                         this.handle_ble_message(msg);
                     }
                     drop(rx);
-
-                    // Generate dummy data if not connected
-                    if this.use_dummy_data && this.connection_state == ConnectionState::Disconnected
-                    {
-                        ble_state_for_poll
-                            .lock()
-                            .imu_history
-                            .generate_dummy_reading();
-                    }
 
                     cx.notify();
                 });
@@ -77,7 +63,6 @@ impl ImuViewerApp {
             focus_handle,
             ble_state,
             connection_state: ConnectionState::Disconnected,
-            use_dummy_data: true,
         }
     }
 
@@ -85,10 +70,6 @@ impl ImuViewerApp {
         match msg {
             BleMessage::StateChanged(state) => {
                 self.connection_state = state;
-                // Stop generating dummy data once we connect
-                if self.connection_state == ConnectionState::Connected {
-                    self.use_dummy_data = false;
-                }
             }
             BleMessage::AccelData(accel) => {
                 self.ble_state.lock().imu_history.push_accel(accel);
@@ -202,7 +183,7 @@ impl ImuViewerApp {
 
     fn connection_status_text(&self) -> String {
         match &self.connection_state {
-            ConnectionState::Disconnected => "Disconnected (using dummy data)".to_string(),
+            ConnectionState::Disconnected => "Disconnected".to_string(),
             ConnectionState::Scanning => "Scanning for Pebble...".to_string(),
             ConnectionState::Connecting => "Connecting...".to_string(),
             ConnectionState::Connected => "Connected via BLE".to_string(),
@@ -220,6 +201,8 @@ impl Focusable for ImuViewerApp {
 impl Render for ImuViewerApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let is_connected = self.connection_state == ConnectionState::Connected;
+
         let state = self.ble_state.lock();
         let accel = state.imu_history.accel.clone();
         let gyro = state.imu_history.gyro.clone();
@@ -247,7 +230,7 @@ impl Render for ImuViewerApp {
                         .child("Pebble IMU Viewer"),
                 ),
             )
-            .child(
+            .child(if is_connected {
                 // Main content with three charts
                 h_flex()
                     .flex_1()
@@ -255,8 +238,59 @@ impl Render for ImuViewerApp {
                     .gap_4()
                     .child(self.render_sensor_chart("Accelerometer (raw)", &accel, cx))
                     .child(self.render_sensor_chart("Gyroscope (raw)", &gyro, cx))
-                    .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx)),
-            )
+                    .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx))
+                    .into_any_element()
+            } else {
+                // Connection status in center
+                let is_scanning = matches!(
+                    self.connection_state,
+                    ConnectionState::Scanning | ConnectionState::Connecting
+                );
+                let center_dot_color = if is_scanning {
+                    hsla(0.6, 0.7, 0.5, 1.0) // blue
+                } else {
+                    status_color
+                };
+
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        v_flex()
+                            .items_center()
+                            .gap_4()
+                            .child(if is_scanning {
+                                div()
+                                    .id("pulse-dot")
+                                    .size(px(16.0))
+                                    .rounded_full()
+                                    .bg(center_dot_color)
+                                    .with_animation(
+                                        "pulse",
+                                        Animation::new(std::time::Duration::from_millis(1000))
+                                            .repeat()
+                                            .with_easing(pulsating_easing),
+                                        |this, delta| this.opacity(0.4 + 0.6 * delta),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .size(px(16.0))
+                                    .rounded_full()
+                                    .bg(center_dot_color)
+                                    .into_any_element()
+                            })
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .text_color(theme.muted_foreground)
+                                    .child(status_text.clone()),
+                            ),
+                    )
+                    .into_any_element()
+            })
             .child(
                 // Status bar
                 div()
