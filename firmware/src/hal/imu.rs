@@ -501,106 +501,66 @@ where
         &mut self,
         delay: &mut D,
     ) -> Result<(), Error<E>> {
-        defmt::info!("Initializing magnetometer via BMI270 auxiliary interface...");
+        defmt::info!("=== Scanning AUX I2C bus ===");
 
-        // According to Bosch BMI270 Sensor API example, the proper sequence is:
-        // 1. Disable advanced power save
-        // 2. Configure pull-up resistor for auxiliary SDA
-        // 3. Set auxiliary I2C address
-        // 4. Enable manual mode
-        // 5. Enable aux sensor in PWR_CTRL
-        // 6. Initialize magnetometer through aux interface
-        // 7. Switch to automatic mode for continuous reading
-
-        // Step 1: Disable advanced power save mode
-        defmt::info!("Step 1: Disabling advanced power save...");
+        // 1. Disable power save
         self.write_reg(reg::PWR_CONF, 0x00)?;
         delay.delay_ms(1);
 
-        // Step 2: Configure pull-up resistor for auxiliary SDA line
-        // AUX_IF_TRIM register (0x68): bits 1:0 = ASDA_PUPSEL
-        // 0x00 = off, 0x01 = 40k, 0x02 = 10k, 0x03 = 2k
-        defmt::info!("Step 2: Configuring AUX SDA pull-up (2k ohm - strongest)...");
-        let aux_if_trim = self.read_reg(reg::AUX_IF_TRIM)?;
-        defmt::info!("AUX_IF_TRIM before: {:#x}", aux_if_trim);
-        // Set 2k pull-up (value 0x03 in bits 1:0) - strongest pull-up
-        self.write_reg(reg::AUX_IF_TRIM, (aux_if_trim & 0xFC) | 0x03)?;
-        delay.delay_ms(1);
-        let aux_if_trim_after = self.read_reg(reg::AUX_IF_TRIM)?;
-        defmt::info!("AUX_IF_TRIM after: {:#x}", aux_if_trim_after);
+        // 2. Enable aux power
+        let pwr = self.read_reg(reg::PWR_CTRL)?;
+        self.write_reg(reg::PWR_CTRL, pwr | 0x01)?;
+        delay.delay_ms(10);
 
-        // Step 3: Set auxiliary device I2C address (BMM350 = 0x14)
-        // Try both shifted and non-shifted address formats
-        defmt::info!("Step 3: Setting AUX_DEV_ID...");
-
-        // First try: address << 1 (7-bit address in bits 7:1)
-        defmt::info!(
-            "  Trying AUX_DEV_ID = {:#x} (0x14 << 1)",
-            BMM350_I2C_ADDR << 1
-        );
-        self.write_reg(reg::AUX_DEV_ID, BMM350_I2C_ADDR << 1)?;
-        delay.delay_ms(1);
-        let dev_id = self.read_reg(reg::AUX_DEV_ID)?;
-        defmt::info!("  AUX_DEV_ID readback: {:#x}", dev_id);
-
-        // Step 4: Configure AUX_CONF for ODR
-        // AUX_CONF (0x44): bits 3:0 = aux_odr, bits 7:4 = aux_offset
-        defmt::info!("Step 4: Configuring AUX_CONF ODR (100Hz)...");
-        self.write_reg(reg::AUX_CONF, 0x08)?; // 100Hz ODR
+        // 3. Pull-up 2k
+        let trim = self.read_reg(reg::AUX_IF_TRIM)?;
+        self.write_reg(reg::AUX_IF_TRIM, (trim & 0xFC) | 0x03)?;
         delay.delay_ms(1);
 
-        // Step 5: Configure auxiliary interface for manual mode
-        // AUX_IF_CONF (0x4C) according to bmi2 crate:
-        //   bit 7 = aux_manual_en (manual mode)
-        //   bit 6 = aux_fcu_write_en (FCU write command enable)
-        //   bits 3:2 = man_rd_burst (manual mode burst: 00=1, 01=2, 10=4, 11=8 bytes)
-        //   bits 1:0 = aux_rd_burst (auto mode burst: 00=1, 01=2, 10=4, 11=8 bytes)
-        defmt::info!("Step 5: Enabling manual mode with FCU write...");
-        // 0xC0 = manual_en (bit 7) + fcu_write_en (bit 6), burst=1 byte (bits 3:2=00, bits 1:0=00)
-        self.write_reg(reg::AUX_IF_CONF, 0xC0)?;
+        // 4. Manual mode
+        self.write_reg(reg::AUX_IF_CONF, 0x80)?;
         delay.delay_ms(1);
-        let aux_if_conf = self.read_reg(reg::AUX_IF_CONF)?;
-        defmt::info!("AUX_IF_CONF: {:#x}", aux_if_conf);
 
-        // Step 6: Enable auxiliary sensor in PWR_CTRL
-        defmt::info!("Step 6: Enabling AUX in PWR_CTRL...");
-        let pwr_ctrl = self.read_reg(reg::PWR_CTRL)?;
-        defmt::info!("PWR_CTRL before: {:#x}", pwr_ctrl);
-        self.write_reg(reg::PWR_CTRL, pwr_ctrl | 0x01)?;
-        delay.delay_ms(100); // Wait longer for aux interface to stabilize
+        // Scan all addresses 0x08-0x77
+        defmt::info!("Scanning addresses 0x08 to 0x77...");
+        for addr in 0x08u8..=0x77 {
+            // Set address (shifted)
+            self.write_reg(reg::AUX_DEV_ID, addr << 1)?;
 
-        let pwr_ctrl_after = self.read_reg(reg::PWR_CTRL)?;
-        defmt::info!("PWR_CTRL after: {:#x}", pwr_ctrl_after);
+            // Clear error
+            let _ = self.read_reg(reg::ERR_REG)?;
 
-        // Check for errors
+            // Trigger read
+            self.write_reg(reg::AUX_RD_ADDR, 0x00)?;
+            delay.delay_ms(2);
+
+            // Check error
+            let err = self.read_reg(reg::ERR_REG)?;
+
+            if (err & 0x80) == 0 {
+                // No aux_err - device responded!
+                let mut buf = [0u8; 1];
+                self.read_regs(reg::AUX_DATA_0, &mut buf)?;
+                defmt::info!("Found device at {:#x}! Data: {:#x}", addr, buf[0]);
+            }
+        }
+        defmt::info!("Scan complete.");
+
+        // Now try BMM350 at 0x14
+        self.write_reg(reg::AUX_DEV_ID, 0x28)?;
+        delay.delay_ms(1);
+        let _ = self.read_reg(reg::ERR_REG)?;
+        self.write_reg(reg::AUX_RD_ADDR, 0x00)?;
+        delay.delay_ms(20);
+
+        let mut buf = [0u8; 8];
+        self.read_regs(reg::AUX_DATA_0, &mut buf)?;
+
         let err = self.read_reg(reg::ERR_REG)?;
-        defmt::info!("ERR_REG after setup: {:#x}", err);
+        defmt::info!("BMM350 (0x14): data={:?}, err={:#x}", buf, err);
 
-        // Try to read the BMM350 chip ID
-        // First try: address 0x14 with shift (standard 7-bit I2C format)
-        defmt::info!("Attempt 1: Reading BMM350 chip ID (addr=0x14<<1=0x28)...");
-        let chip_id = self.aux_read_reg(bmm350_reg::CHIP_ID, delay)?;
+        let chip_id = buf[0];
 
-        // If not found, try without shift (maybe BMI270 does its own shifting)
-        let chip_id = if chip_id != BMM350_CHIP_ID {
-            defmt::info!("Attempt 2: Trying addr=0x14 (no shift)...");
-            self.write_reg(reg::AUX_DEV_ID, BMM350_I2C_ADDR)?; // No shift
-            delay.delay_ms(5);
-            self.aux_read_reg(bmm350_reg::CHIP_ID, delay)?
-        } else {
-            chip_id
-        };
-
-        // If still not found, try alternate address 0x15 with shift
-        let chip_id = if chip_id != BMM350_CHIP_ID {
-            defmt::info!("Attempt 3: Trying addr=0x15<<1=0x2A...");
-            self.write_reg(reg::AUX_DEV_ID, 0x15 << 1)?;
-            delay.delay_ms(5);
-            self.aux_read_reg(bmm350_reg::CHIP_ID, delay)?
-        } else {
-            chip_id
-        };
-        defmt::info!("BMM350 chip ID: {:#x}", chip_id);
         if chip_id != BMM350_CHIP_ID {
             return Err(Error::InvalidChipId(chip_id));
         }
