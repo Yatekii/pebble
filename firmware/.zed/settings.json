@@ -1,18 +1,12 @@
 {
-  "lsp": {
-    "rust-analyzer": {
-      "binary": {
-        "path": "rust-analyzer",
-        "arguments": []
-      },
-      "initialization_options": {
-        "check": {
-          "allTargets": false
-        },
-        "cargo": {
-          "target": "riscv32imac-unknown-none-elf"
+    "lsp": {
+        "rust-analyzer": {
+            "initialization_options": {
+                "cargo": {
+                    "allTargets": false,
+                    "target": "riscv32imac-unknown-none-elf",
+                },
+            }
         }
-      }
     }
-  }
 }

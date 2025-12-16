@@ -1,0 +1,43 @@
+[package]
+name = "pebble"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+esp-hal = { git = "https://github.com/esp-rs/esp-hal", features = ["esp32c6", "defmt", "unstable"] }
+esp-backtrace = { git = "https://github.com/esp-rs/esp-hal", features = ["esp32c6", "panic-handler", "defmt"] }
+embassy-executor = { version = "0.6.0", features = ["task-arena-size-32768"] }
+embassy-time = "0.3.0"
+embassy-time-driver = { version = "0.1.0", features = ["tick-hz-1_000_000"] }
+static_cell = "2.1.0"
+defmt = "0.3"
+rtt-target = { version = "0.6", features = ["defmt"] }
+heapless = "0.8"
+
+# Sensor drivers
+bmi2 = "0.1"
+bmm350 = "0.0.2"
+nmea = { version = "0.7", default-features = false }
+embedded-hal = "1.0"
+
+# LED driver (smart-leds traits for future WS2812B support)
+smart-leds = "0.4"
+
+# Flash storage for persistent state
+esp-storage = { git = "https://github.com/esp-rs/esp-hal", features = ["esp32c6"] }
+embedded-storage = "0.3"
+
+# Math functions for no_std
+libm = "0.2"
+
+# Serialization for persistent state
+postcard = "1.0"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+debug = true
