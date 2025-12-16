@@ -1,0 +1,16 @@
+[package]
+name = "gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+btleplug = "0.11"
+futures = "0.3"
+gpui = "0.2.2"
+gpui-component = { path = "../../gpui-component/crates/ui" }
+gpui-component-assets = { path = "../../gpui-component/crates/assets" }
+parking_lot = "0.12"
+rand = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+uuid = "1"

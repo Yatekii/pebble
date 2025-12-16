@@ -5,3 +5,5 @@
 _autosave-pebble*
 autosave-pebble*
 **/.DS_Store
+
+**/target/*
