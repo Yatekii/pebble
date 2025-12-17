@@ -32,6 +32,21 @@ const MAG_DATA_UUID: Uuid = Uuid::from_bytes([
     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf3,
 ]);
 
+/// UUID for LED colors chunk 0 (LEDs 0-23, 72 bytes: 24 LEDs × 3 RGB bytes)
+const LED_COLORS_0_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf6,
+]);
+
+/// UUID for LED colors chunk 1 (LEDs 24-47, 72 bytes: 24 LEDs × 3 RGB bytes)
+const LED_COLORS_1_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf7,
+]);
+
+/// UUID for LED colors chunk 2 (LEDs 48-71, 72 bytes: 24 LEDs × 3 RGB bytes)
+const LED_COLORS_2_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf8,
+]);
+
 /// BLE connection state
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectionState {
@@ -42,12 +57,20 @@ pub enum ConnectionState {
     Error(String),
 }
 
+/// RGB color for a single LED
+pub type LedColor = [u8; 3];
+
+/// All 72 LED colors
+pub type LedColors = [LedColor; 72];
+
 /// Message sent from BLE task to the UI
 pub enum BleMessage {
     StateChanged(ConnectionState),
     AccelData(ImuReading),
     GyroData(ImuReading),
     MagData(ImuReading),
+    /// LED colors update: chunk index (0, 1, or 2) and 24 LED colors
+    LedColorsChunk(u8, [LedColor; 24]),
 }
 
 /// Shared state between BLE task and UI
@@ -140,9 +163,17 @@ async fn run_ble_client(
             eprintln!("  - {} (props: {:?})", c.uuid, c.properties);
         }
 
+        // Debug: print expected UUIDs
+        eprintln!("Looking for LED0: {}", LED_COLORS_0_UUID);
+        eprintln!("Looking for LED1: {}", LED_COLORS_1_UUID);
+        eprintln!("Looking for LED2: {}", LED_COLORS_2_UUID);
+
         let acc_char = characteristics.iter().find(|c| c.uuid == ACC_DATA_UUID);
         let gyro_char = characteristics.iter().find(|c| c.uuid == GYRO_DATA_UUID);
         let mag_char = characteristics.iter().find(|c| c.uuid == MAG_DATA_UUID);
+        let led0_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_0_UUID);
+        let led1_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_1_UUID);
+        let led2_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_2_UUID);
 
         // Subscribe to notifications
         if let Some(acc_char) = acc_char {
@@ -175,6 +206,59 @@ async fn run_ble_client(
             eprintln!("MAG characteristic not found!");
         }
 
+        if let Some(led0_char) = led0_char {
+            eprintln!("Subscribing to LED0 characteristic...");
+            match device.subscribe(led0_char).await {
+                Ok(_) => eprintln!("  Subscribed to LED0 notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to LED0: {:?}", e),
+            }
+        } else {
+            eprintln!("LED0 characteristic not found!");
+        }
+
+        if let Some(led1_char) = led1_char {
+            eprintln!("Subscribing to LED1 characteristic...");
+            match device.subscribe(led1_char).await {
+                Ok(_) => eprintln!("  Subscribed to LED1 notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to LED1: {:?}", e),
+            }
+        } else {
+            eprintln!("LED1 characteristic not found!");
+        }
+
+        if let Some(led2_char) = led2_char {
+            eprintln!("Subscribing to LED2 characteristic...");
+            match device.subscribe(led2_char).await {
+                Ok(_) => eprintln!("  Subscribed to LED2 notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to LED2: {:?}", e),
+            }
+        } else {
+            eprintln!("LED2 characteristic not found!");
+        }
+
+        // Read LED colors initially (firmware uses .set() not .notify())
+        read_led_colors(&device, led0_char, led1_char, led2_char, &tx).await;
+
+        // Spawn a task to periodically poll LED colors
+        let device_for_poll = device.clone();
+        let tx_for_poll = tx.clone();
+        let led0_char_clone = led0_char.cloned();
+        let led1_char_clone = led1_char.cloned();
+        let led2_char_clone = led2_char.cloned();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                read_led_colors(
+                    &device_for_poll,
+                    led0_char_clone.as_ref(),
+                    led1_char_clone.as_ref(),
+                    led2_char_clone.as_ref(),
+                    &tx_for_poll,
+                )
+                .await;
+            }
+        });
+
         // Listen for notifications
         eprintln!("Waiting for notifications...");
         let mut notification_stream = device.notifications().await?;
@@ -182,7 +266,7 @@ async fn run_ble_client(
 
         while let Some(notification) = notification_stream.next().await {
             notification_count += 1;
-            if notification_count <= 5 || notification_count % 100 == 0 {
+            if notification_count <= 5 || notification_count.is_multiple_of(100) {
                 eprintln!(
                     "Notification #{}: uuid={}, len={}",
                     notification_count,
@@ -215,6 +299,18 @@ async fn run_ble_client(
                     z: i32::from_le_bytes([data[8], data[9], data[10], data[11]]) as f64,
                 };
                 let _ = tx.send(BleMessage::MagData(mag));
+            } else if notification.uuid == LED_COLORS_0_UUID && notification.value.len() >= 72 {
+                if let Some(colors) = parse_led_colors(&notification.value) {
+                    let _ = tx.send(BleMessage::LedColorsChunk(0, colors));
+                }
+            } else if notification.uuid == LED_COLORS_1_UUID && notification.value.len() >= 72 {
+                if let Some(colors) = parse_led_colors(&notification.value) {
+                    let _ = tx.send(BleMessage::LedColorsChunk(1, colors));
+                }
+            } else if notification.uuid == LED_COLORS_2_UUID && notification.value.len() >= 72 {
+                if let Some(colors) = parse_led_colors(&notification.value) {
+                    let _ = tx.send(BleMessage::LedColorsChunk(2, colors));
+                }
             }
         }
 
@@ -227,6 +323,73 @@ async fn run_ble_client(
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
         state.lock().connection_state = ConnectionState::Disconnected;
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// Parse 72 bytes into 24 LED RGB colors
+fn parse_led_colors(data: &[u8]) -> Option<[LedColor; 24]> {
+    if data.len() < 72 {
+        return None;
+    }
+    let mut colors = [[0u8; 3]; 24];
+    for i in 0..24 {
+        colors[i] = [data[i * 3], data[i * 3 + 1], data[i * 3 + 2]];
+    }
+    Some(colors)
+}
+
+/// Read LED colors from characteristics (for polling since firmware doesn't notify)
+async fn read_led_colors(
+    device: &Peripheral,
+    led0_char: Option<&btleplug::api::Characteristic>,
+    led1_char: Option<&btleplug::api::Characteristic>,
+    led2_char: Option<&btleplug::api::Characteristic>,
+    tx: &mpsc::Sender<BleMessage>,
+) {
+    if let Some(char) = led0_char {
+        match device.read(char).await {
+            Ok(data) => {
+                eprintln!(
+                    "LED0 read: {} bytes, first 9: {:?}",
+                    data.len(),
+                    &data[..data.len().min(9)]
+                );
+                if let Some(colors) = parse_led_colors(&data) {
+                    let _ = tx.send(BleMessage::LedColorsChunk(0, colors));
+                }
+            }
+            Err(e) => eprintln!("LED0 read error: {:?}", e),
+        }
+    }
+    if let Some(char) = led1_char {
+        match device.read(char).await {
+            Ok(data) => {
+                eprintln!(
+                    "LED1 read: {} bytes, first 9: {:?}",
+                    data.len(),
+                    &data[..data.len().min(9)]
+                );
+                if let Some(colors) = parse_led_colors(&data) {
+                    let _ = tx.send(BleMessage::LedColorsChunk(1, colors));
+                }
+            }
+            Err(e) => eprintln!("LED1 read error: {:?}", e),
+        }
+    }
+    if let Some(char) = led2_char {
+        match device.read(char).await {
+            Ok(data) => {
+                eprintln!(
+                    "LED2 read: {} bytes, first 9: {:?}",
+                    data.len(),
+                    &data[..data.len().min(9)]
+                );
+                if let Some(colors) = parse_led_colors(&data) {
+                    let _ = tx.send(BleMessage::LedColorsChunk(2, colors));
+                }
+            }
+            Err(e) => eprintln!("LED2 read error: {:?}", e),
+        }
     }
 }
 

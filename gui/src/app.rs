@@ -5,9 +5,10 @@ use gpui_component::{ActiveTheme, Root, TitleBar, h_flex, v_flex};
 use gpui_component_assets::Assets;
 use parking_lot::Mutex;
 
-use crate::ble::{BleMessage, BleState, ConnectionState, start_ble_client};
+use crate::ble::{BleMessage, BleState, ConnectionState, LedColors, start_ble_client};
 use crate::chart::SimpleLineChart;
 use crate::data::ImuReading;
+use crate::orientation::{Orientation, OrientationView, calculate_orientation, smooth_orientation};
 
 actions!(imu_viewer, [Quit]);
 
@@ -20,6 +21,8 @@ pub struct ImuViewerApp {
     focus_handle: FocusHandle,
     ble_state: Arc<Mutex<BleState>>,
     connection_state: ConnectionState,
+    smoothed_orientation: Orientation,
+    led_colors: LedColors,
 }
 
 impl ImuViewerApp {
@@ -63,6 +66,8 @@ impl ImuViewerApp {
             focus_handle,
             ble_state,
             connection_state: ConnectionState::Disconnected,
+            smoothed_orientation: Orientation::default(),
+            led_colors: [[0; 3]; 72],
         }
     }
 
@@ -79,6 +84,15 @@ impl ImuViewerApp {
             }
             BleMessage::MagData(mag) => {
                 self.ble_state.lock().imu_history.push_mag(mag);
+            }
+            BleMessage::LedColorsChunk(chunk, colors) => {
+                // Copy 24 LED colors to the appropriate position
+                let start = (chunk as usize) * 24;
+                for (i, color) in colors.iter().enumerate() {
+                    if start + i < 72 {
+                        self.led_colors[start + i] = *color;
+                    }
+                }
             }
         }
     }
@@ -231,14 +245,44 @@ impl Render for ImuViewerApp {
                 ),
             )
             .child(if is_connected {
-                // Main content with three charts
-                h_flex()
+                // Calculate orientation from latest sensor readings with smoothing
+                if !accel.is_empty() && !mag.is_empty() {
+                    let last_accel = accel.last().unwrap();
+                    let last_mag = mag.last().unwrap();
+                    let target = calculate_orientation(
+                        (last_accel.x, last_accel.y, last_accel.z),
+                        (last_mag.x, last_mag.y, last_mag.z),
+                    );
+                    // Smooth with alpha=0.15 (lower = smoother but more lag)
+                    self.smoothed_orientation =
+                        smooth_orientation(self.smoothed_orientation, target, 0.15);
+                }
+                let orientation = self.smoothed_orientation;
+                let led_colors = self.led_colors;
+
+                // Main content with charts and orientation view
+                v_flex()
                     .flex_1()
                     .p_4()
                     .gap_4()
-                    .child(self.render_sensor_chart("Accelerometer (raw)", &accel, cx))
-                    .child(self.render_sensor_chart("Gyroscope (raw)", &gyro, cx))
-                    .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx))
+                    // Charts row
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .gap_4()
+                            .child(self.render_sensor_chart("Accelerometer (raw)", &accel, cx))
+                            .child(self.render_sensor_chart("Gyroscope (raw)", &gyro, cx))
+                            .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx)),
+                    )
+                    // Orientation view row
+                    .child(
+                        h_flex().h(px(200.0)).gap_4().child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .child(OrientationView::new(orientation, led_colors)),
+                        ),
+                    )
                     .into_any_element()
             } else {
                 // Connection status in center
@@ -333,7 +377,7 @@ pub fn run_app() {
                 titlebar: Some(TitleBar::title_bar_options()),
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(1400.), px(600.)),
+                    size(px(1400.), px(800.)),
                     cx,
                 ))),
                 ..Default::default()
