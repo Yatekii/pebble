@@ -5,10 +5,11 @@ use gpui_component::{ActiveTheme, Root, TitleBar, h_flex, v_flex};
 use gpui_component_assets::Assets;
 use parking_lot::Mutex;
 
-use crate::ble::{BleMessage, BleState, ConnectionState, LedColors, start_ble_client};
+use crate::ble::{BleMessage, BleState, ConnectionState, GpsReading, LedColors, start_ble_client};
 use crate::chart::{MultiLineChart, Series};
-use crate::data::ImuReading;
-use crate::orientation::{Orientation, OrientationView, calculate_orientation, smooth_orientation};
+use crate::data::{AhrsReading, ImuReading};
+use crate::map::{GpsPosition, MapViewElement};
+use crate::orientation::{Orientation, OrientationView};
 
 actions!(imu_viewer, [Quit]);
 
@@ -21,8 +22,8 @@ pub struct ImuViewerApp {
     focus_handle: FocusHandle,
     ble_state: Arc<Mutex<BleState>>,
     connection_state: ConnectionState,
-    smoothed_orientation: Orientation,
     led_colors: LedColors,
+    gps_reading: GpsReading,
 }
 
 impl ImuViewerApp {
@@ -80,8 +81,8 @@ impl ImuViewerApp {
             focus_handle,
             ble_state,
             connection_state: ConnectionState::Disconnected,
-            smoothed_orientation: Orientation::default(),
             led_colors: [[0; 3]; 72],
+            gps_reading: GpsReading::default(),
         }
     }
 
@@ -98,6 +99,16 @@ impl ImuViewerApp {
             }
             BleMessage::MagData(mag) => {
                 self.ble_state.lock().imu_history.push_mag(mag);
+            }
+            BleMessage::AhrsData(ahrs) => {
+                self.ble_state.lock().imu_history.push_ahrs(AhrsReading {
+                    roll: ahrs.roll as f64,
+                    pitch: ahrs.pitch as f64,
+                    yaw: ahrs.yaw as f64,
+                });
+            }
+            BleMessage::GpsData(gps) => {
+                self.gps_reading = gps;
             }
             BleMessage::LedColorsChunk(chunk, colors) => {
                 // Copy 24 LED colors to the appropriate position
@@ -171,6 +182,66 @@ impl ImuViewerApp {
             )
     }
 
+    fn render_ahrs_chart(
+        &self,
+        title: &str,
+        readings: &[AhrsReading],
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        // Convert readings to separate roll, pitch, yaw value vectors
+        let roll_data: Vec<f64> = readings.iter().map(|r| r.roll).collect();
+        let pitch_data: Vec<f64> = readings.iter().map(|r| r.pitch).collect();
+        let yaw_data: Vec<f64> = readings.iter().map(|r| r.yaw).collect();
+
+        let red = hsla(0.0, 0.7, 0.5, 1.0);
+        let green = hsla(0.33, 0.7, 0.45, 1.0);
+        let blue = hsla(0.6, 0.7, 0.5, 1.0);
+
+        let series = vec![
+            Series {
+                data: roll_data,
+                color: red,
+                label: "Roll",
+            },
+            Series {
+                data: pitch_data,
+                color: green,
+                label: "Pitch",
+            },
+            Series {
+                data: yaw_data,
+                color: blue,
+                label: "Yaw",
+            },
+        ];
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .h_full()
+            .p_2()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.foreground)
+                    .child(title.to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .h_full()
+                    .child(MultiLineChart::new(series)),
+            )
+    }
+
     fn connection_status_color(&self) -> Hsla {
         match &self.connection_state {
             ConnectionState::Disconnected => hsla(0.0, 0.0, 0.5, 1.0), // gray
@@ -207,6 +278,7 @@ impl Render for ImuViewerApp {
         let accel = state.imu_history.accel.clone();
         let gyro = state.imu_history.gyro.clone();
         let mag = state.imu_history.mag.clone();
+        let ahrs = state.imu_history.ahrs.clone();
         let sample_count = state.imu_history.len();
         drop(state);
 
@@ -231,19 +303,17 @@ impl Render for ImuViewerApp {
                 ),
             )
             .child(if is_connected {
-                // Calculate orientation from latest sensor readings with smoothing
-                if !accel.is_empty() && !mag.is_empty() {
-                    let last_accel = accel.last().unwrap();
-                    let last_mag = mag.last().unwrap();
-                    let target = calculate_orientation(
-                        (last_accel.x, last_accel.y, last_accel.z),
-                        (last_mag.x, last_mag.y, last_mag.z),
-                    );
-                    // Smooth with alpha=0.15 (lower = smoother but more lag)
-                    self.smoothed_orientation =
-                        smooth_orientation(self.smoothed_orientation, target, 0.15);
-                }
-                let orientation = self.smoothed_orientation;
+                // Use AHRS orientation from firmware (already filtered via Madgwick algorithm)
+                let orientation = if let Some(last_ahrs) = ahrs.last() {
+                    // AHRS provides roll, pitch, yaw in degrees, convert to radians
+                    Orientation {
+                        roll: last_ahrs.roll.to_radians(),
+                        pitch: last_ahrs.pitch.to_radians(),
+                        yaw: last_ahrs.yaw.to_radians(),
+                    }
+                } else {
+                    Orientation::default()
+                };
                 let led_colors = self.led_colors;
 
                 // Main content with charts on left, orientation on right
@@ -262,14 +332,27 @@ impl Render for ImuViewerApp {
                             .gap_2()
                             .child(self.render_sensor_chart("Accelerometer (raw)", &accel, cx))
                             .child(self.render_sensor_chart("Gyroscope (raw)", &gyro, cx))
-                            .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx)),
+                            .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx))
+                            .child(self.render_ahrs_chart("AHRS Orientation (degrees)", &ahrs, cx)),
                     )
-                    // Orientation view on the right
+                    // Orientation and map views on the right
                     .child(
-                        div()
+                        v_flex()
                             .w(px(400.0))
                             .h_full()
-                            .child(OrientationView::new(orientation, led_colors)),
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(OrientationView::new(orientation, led_colors)),
+                            )
+                            .child(div().flex_1().min_h_0().child(MapViewElement::new(
+                                GpsPosition {
+                                    latitude: self.gps_reading.latitude as f64,
+                                    longitude: self.gps_reading.longitude as f64,
+                                },
+                            ))),
                     )
                     .into_any_element()
             } else {
@@ -349,7 +432,10 @@ impl Render for ImuViewerApp {
 }
 
 pub fn run_app() {
-    let app = Application::new().with_assets(Assets);
+    let http_client = crate::http::IsahcHttpClient::new();
+    let app = Application::new()
+        .with_assets(Assets)
+        .with_http_client(http_client);
 
     app.run(move |cx| {
         gpui_component::init(cx);

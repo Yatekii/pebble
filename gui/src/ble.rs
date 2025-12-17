@@ -47,6 +47,16 @@ const LED_COLORS_2_UUID: Uuid = Uuid::from_bytes([
     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf8,
 ]);
 
+/// UUID for AHRS orientation data characteristic (12 bytes: 3x f32 roll, pitch, yaw in degrees)
+const AHRS_DATA_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf9,
+]);
+
+/// UUID for GPS data characteristic (15 bytes: lat, lon, alt as f32, satellites, fix_quality, has_fix as u8)
+const GPS_DATA_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfa,
+]);
+
 /// BLE connection state
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectionState {
@@ -63,12 +73,34 @@ pub type LedColor = [u8; 3];
 /// All 72 LED colors
 pub type LedColors = [LedColor; 72];
 
+/// AHRS orientation reading (roll, pitch, yaw in degrees)
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AhrsReading {
+    pub roll: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+}
+
+/// GPS reading
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GpsReading {
+    pub latitude: f32,
+    pub longitude: f32,
+    pub altitude: f32,
+    pub satellites: u8,
+    #[allow(dead_code)]
+    pub fix_quality: u8,
+    pub has_fix: bool,
+}
+
 /// Message sent from BLE task to the UI
 pub enum BleMessage {
     StateChanged(ConnectionState),
     AccelData(ImuReading),
     GyroData(ImuReading),
     MagData(ImuReading),
+    AhrsData(AhrsReading),
+    GpsData(GpsReading),
     /// LED colors update: chunk index (0, 1, or 2) and 24 LED colors
     LedColorsChunk(u8, [LedColor; 24]),
 }
@@ -167,6 +199,7 @@ async fn run_ble_client(
         }
 
         // Debug: print expected UUIDs
+        eprintln!("Looking for AHRS: {}", AHRS_DATA_UUID);
         eprintln!("Looking for LED0: {}", LED_COLORS_0_UUID);
         eprintln!("Looking for LED1: {}", LED_COLORS_1_UUID);
         eprintln!("Looking for LED2: {}", LED_COLORS_2_UUID);
@@ -174,6 +207,8 @@ async fn run_ble_client(
         let acc_char = characteristics.iter().find(|c| c.uuid == ACC_DATA_UUID);
         let gyro_char = characteristics.iter().find(|c| c.uuid == GYRO_DATA_UUID);
         let mag_char = characteristics.iter().find(|c| c.uuid == MAG_DATA_UUID);
+        let ahrs_char = characteristics.iter().find(|c| c.uuid == AHRS_DATA_UUID);
+        let gps_char = characteristics.iter().find(|c| c.uuid == GPS_DATA_UUID);
         let led0_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_0_UUID);
         let led1_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_1_UUID);
         let led2_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_2_UUID);
@@ -207,6 +242,26 @@ async fn run_ble_client(
             }
         } else {
             eprintln!("MAG characteristic not found!");
+        }
+
+        if let Some(ahrs_char) = ahrs_char {
+            eprintln!("Subscribing to AHRS characteristic...");
+            match device.subscribe(ahrs_char).await {
+                Ok(_) => eprintln!("  Subscribed to AHRS notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to AHRS: {:?}", e),
+            }
+        } else {
+            eprintln!("AHRS characteristic not found!");
+        }
+
+        if let Some(gps_char) = gps_char {
+            eprintln!("Subscribing to GPS characteristic...");
+            match device.subscribe(gps_char).await {
+                Ok(_) => eprintln!("  Subscribed to GPS notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to GPS: {:?}", e),
+            }
+        } else {
+            eprintln!("GPS characteristic not found!");
         }
 
         if let Some(led0_char) = led0_char {
@@ -316,23 +371,72 @@ async fn run_ble_client(
                     z: i16::from_le_bytes([data[4], data[5]]) as f64,
                 };
                 let _ = tx.send(BleMessage::GyroData(gyro));
-            } else if notification.uuid == MAG_DATA_UUID && notification.value.len() >= 6 {
+            } else if notification.uuid == MAG_DATA_UUID && notification.value.len() >= 12 {
                 let data = &notification.value;
                 let mag = ImuReading {
-                    x: i16::from_le_bytes([data[0], data[1]]) as f64,
-                    y: i16::from_le_bytes([data[2], data[3]]) as f64,
-                    z: i16::from_le_bytes([data[4], data[5]]) as f64,
+                    x: i32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64,
+                    y: i32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64,
+                    z: i32::from_le_bytes([data[8], data[9], data[10], data[11]]) as f64,
                 };
                 let _ = tx.send(BleMessage::MagData(mag));
+            } else if notification.uuid == AHRS_DATA_UUID && notification.value.len() >= 12 {
+                let data = &notification.value;
+                let ahrs = AhrsReading {
+                    roll: f32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+                    pitch: f32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+                    yaw: f32::from_le_bytes([data[8], data[9], data[10], data[11]]),
+                };
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!(
+                        "AHRS received: roll={:.1} pitch={:.1} yaw={:.1}",
+                        ahrs.roll, ahrs.pitch, ahrs.yaw
+                    );
+                }
+                let _ = tx.send(BleMessage::AhrsData(ahrs));
+            } else if notification.uuid == GPS_DATA_UUID && notification.value.len() >= 15 {
+                let data = &notification.value;
+                let gps = GpsReading {
+                    latitude: f32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+                    longitude: f32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+                    altitude: f32::from_le_bytes([data[8], data[9], data[10], data[11]]),
+                    satellites: data[12],
+                    fix_quality: data[13],
+                    has_fix: data[14] != 0,
+                };
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!(
+                        "GPS received: lat={:.6} lon={:.6} alt={:.1} sats={} fix={}",
+                        gps.latitude, gps.longitude, gps.altitude, gps.satellites, gps.has_fix
+                    );
+                }
+                let _ = tx.send(BleMessage::GpsData(gps));
             } else if notification.uuid == LED_COLORS_0_UUID && notification.value.len() >= 72 {
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!(
+                        "LED0 notification: first 9 bytes = {:?}",
+                        &notification.value[..9]
+                    );
+                }
                 if let Some(colors) = parse_led_colors(&notification.value) {
                     let _ = tx.send(BleMessage::LedColorsChunk(0, colors));
                 }
             } else if notification.uuid == LED_COLORS_1_UUID && notification.value.len() >= 72 {
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!(
+                        "LED1 notification: first 9 bytes = {:?}",
+                        &notification.value[..9]
+                    );
+                }
                 if let Some(colors) = parse_led_colors(&notification.value) {
                     let _ = tx.send(BleMessage::LedColorsChunk(1, colors));
                 }
             } else if notification.uuid == LED_COLORS_2_UUID && notification.value.len() >= 72 {
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!(
+                        "LED2 notification: first 9 bytes = {:?}",
+                        &notification.value[..9]
+                    );
+                }
                 if let Some(colors) = parse_led_colors(&notification.value) {
                     let _ = tx.send(BleMessage::LedColorsChunk(2, colors));
                 }

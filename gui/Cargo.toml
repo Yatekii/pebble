@@ -10,6 +10,8 @@ futures = "0.3"
 gpui = "0.2.2"
 gpui-component = { path = "../../gpui-component/crates/ui" }
 gpui-component-assets = { path = "../../gpui-component/crates/assets" }
+gpui_http_client = "0.2.2"
+isahc = { version = "1.7", features = ["http2"] }
 parking_lot = "0.12"
 rand = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }

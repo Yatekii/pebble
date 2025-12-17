@@ -6,6 +6,14 @@ pub struct ImuReading {
     pub z: f64,
 }
 
+/// A single AHRS orientation reading (roll, pitch, yaw in degrees).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AhrsReading {
+    pub roll: f64,
+    pub pitch: f64,
+    pub yaw: f64,
+}
+
 /// Stores the history of IMU readings for plotting.
 pub struct ImuHistory {
     /// Accelerometer readings (raw i16 values from sensor).
@@ -14,6 +22,8 @@ pub struct ImuHistory {
     pub gyro: Vec<ImuReading>,
     /// Magnetometer readings (raw i32 values from sensor).
     pub mag: Vec<ImuReading>,
+    /// AHRS orientation readings (roll, pitch, yaw in degrees).
+    pub ahrs: Vec<AhrsReading>,
     /// Maximum number of samples to keep.
     max_samples: usize,
 }
@@ -24,6 +34,7 @@ impl ImuHistory {
             accel: Vec::with_capacity(max_samples),
             gyro: Vec::with_capacity(max_samples),
             mag: Vec::with_capacity(max_samples),
+            ahrs: Vec::with_capacity(max_samples),
             max_samples,
         }
     }
@@ -50,6 +61,14 @@ impl ImuHistory {
             self.mag.remove(0);
         }
         self.mag.push(mag);
+    }
+
+    /// Push AHRS orientation reading.
+    pub fn push_ahrs(&mut self, ahrs: AhrsReading) {
+        if self.ahrs.len() >= self.max_samples {
+            self.ahrs.remove(0);
+        }
+        self.ahrs.push(ahrs);
     }
 
     pub fn len(&self) -> usize {
