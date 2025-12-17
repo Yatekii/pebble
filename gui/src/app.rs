@@ -10,6 +10,7 @@ use crate::chart::{MultiLineChart, Series};
 use crate::data::{AhrsReading, ImuReading};
 use crate::map::{GpsPosition, MapViewElement};
 use crate::orientation::{Orientation, OrientationView};
+use crate::puzzles::{PuzzleListView, sample_puzzles};
 
 actions!(imu_viewer, [Quit]);
 
@@ -335,7 +336,7 @@ impl Render for ImuViewerApp {
                             .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx))
                             .child(self.render_ahrs_chart("AHRS Orientation (degrees)", &ahrs, cx)),
                     )
-                    // Orientation and map views on the right
+                    // Orientation and map views in the middle
                     .child(
                         v_flex()
                             .w(px(400.0))
@@ -355,6 +356,13 @@ impl Render for ImuViewerApp {
                                 self.gps_reading.satellites,
                                 self.gps_reading.has_fix,
                             ))),
+                    )
+                    // Puzzle list on the right
+                    .child(
+                        div()
+                            .w(px(250.0))
+                            .h_full()
+                            .child(PuzzleListView::new(sample_puzzles())),
                     )
                     .into_any_element()
             } else {
