@@ -111,7 +111,7 @@ impl RenderOnce for OrientationView {
             .w_full()
             .h_full()
             .min_h(px(150.0))
-            .bg(theme.background)
+            .bg(hsla(0.0, 0.0, 0.25, 1.0)) // Dark gray background to see black LEDs
             .border_1()
             .border_color(border_color)
             .rounded_md()
@@ -125,15 +125,17 @@ impl RenderOnce for OrientationView {
 
                         let center_x = bounds.origin.x + bounds.size.width * 0.5;
                         let center_y = bounds.origin.y + bounds.size.height * 0.5;
-                        let size = bounds.size.width.min(bounds.size.height) * 0.35;
+                        let size = bounds.size.width.min(bounds.size.height) * 0.7; // Fill more of the space
                         let scale = f32::from(size) as f64;
                         let distance = 4.0;
 
-                        // Define a rectangular box (like a PCB/device)
-                        // Dimensions: wider than tall, thin
-                        let hw = 1.0; // half width (X)
-                        let hh = 0.6; // half height (Y)
-                        let hd = 0.15; // half depth (Z) - thin like a PCB
+                        // LED circle radius
+                        let led_radius = 0.45;
+
+                        // Define a square box tight around the LED circle
+                        let hw = led_radius + 0.08; // half width (X) - slightly larger than LED circle
+                        let hh = led_radius + 0.08; // half height (Y) - same as width for square
+                        let hd = 0.08; // half depth (Z) - thin like a PCB
 
                         let vertices = [
                             Point3D::new(-hw, -hh, -hd), // 0: back bottom left
@@ -163,16 +165,17 @@ impl RenderOnce for OrientationView {
                         let connect_edges = [(0, 4), (1, 5), (2, 6), (3, 7)];
 
                         // X-axis indicator (red) - from center to +X
+                        let axis_len = hw + 0.15;
                         let axis_origin = Point3D::new(0.0, 0.0, 0.0)
                             .rotate(orientation)
                             .project(scale, distance);
-                        let x_axis = Point3D::new(1.2, 0.0, 0.0)
+                        let x_axis = Point3D::new(axis_len, 0.0, 0.0)
                             .rotate(orientation)
                             .project(scale, distance);
-                        let y_axis = Point3D::new(0.0, 1.2, 0.0)
+                        let y_axis = Point3D::new(0.0, axis_len, 0.0)
                             .rotate(orientation)
                             .project(scale, distance);
-                        let z_axis = Point3D::new(0.0, 0.0, 0.8)
+                        let z_axis = Point3D::new(0.0, 0.0, hd + 0.15)
                             .rotate(orientation)
                             .project(scale, distance);
 
@@ -183,7 +186,6 @@ impl RenderOnce for OrientationView {
 
                         // Generate 72 LEDs in a circle on the top face (Z = hd)
                         let num_leds = 72;
-                        let led_radius = 0.45; // Radius of the LED circle
                         let led_points: Vec<Point3D> = (0..num_leds)
                             .map(|i| {
                                 let angle =
@@ -254,7 +256,7 @@ impl RenderOnce for OrientationView {
                             // Draw LED as a small filled circle
                             let led_x = center_x + px(projected.0 as f32);
                             let led_y = center_y - px(projected.1 as f32);
-                            let led_size = px(4.0);
+                            let led_size = px(8.0);
 
                             // Use a small quad for the LED
                             window.paint_quad(gpui::fill(

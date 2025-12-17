@@ -316,12 +316,12 @@ async fn run_ble_client(
                     z: i16::from_le_bytes([data[4], data[5]]) as f64,
                 };
                 let _ = tx.send(BleMessage::GyroData(gyro));
-            } else if notification.uuid == MAG_DATA_UUID && notification.value.len() >= 12 {
+            } else if notification.uuid == MAG_DATA_UUID && notification.value.len() >= 6 {
                 let data = &notification.value;
                 let mag = ImuReading {
-                    x: i32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64,
-                    y: i32::from_le_bytes([data[4], data[5], data[6], data[7]]) as f64,
-                    z: i32::from_le_bytes([data[8], data[9], data[10], data[11]]) as f64,
+                    x: i16::from_le_bytes([data[0], data[1]]) as f64,
+                    y: i16::from_le_bytes([data[2], data[3]]) as f64,
+                    z: i16::from_le_bytes([data[4], data[5]]) as f64,
                 };
                 let _ = tx.send(BleMessage::MagData(mag));
             } else if notification.uuid == LED_COLORS_0_UUID && notification.value.len() >= 72 {

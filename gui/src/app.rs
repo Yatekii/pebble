@@ -130,15 +130,16 @@ impl ImuViewerApp {
 
         v_flex()
             .flex_1()
-            .p_3()
-            .gap_2()
+            .min_h_0()
+            .p_2()
+            .gap_1()
             .bg(theme.background)
             .border_1()
             .border_color(theme.border)
             .rounded_md()
             .child(
                 div()
-                    .text_sm()
+                    .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.foreground)
                     .child(title.to_string()),
@@ -146,54 +147,66 @@ impl ImuViewerApp {
             // X axis chart
             .child(
                 h_flex()
+                    .flex_1()
+                    .min_h_0()
                     .items_center()
                     .gap_1()
                     .child(
                         h_flex()
-                            .w(px(20.0))
-                            .justify_center()
-                            .child(div().size_3().rounded_sm().bg(red)),
+                            .w(px(24.0))
+                            .gap_1()
+                            .items_center()
+                            .child(div().size_2().rounded_sm().bg(red))
+                            .child(div().text_xs().text_color(red).child("X")),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .h(px(100.0))
+                            .h_full()
                             .child(SimpleLineChart::new(x_data, red)),
                     ),
             )
             // Y axis chart
             .child(
                 h_flex()
+                    .flex_1()
+                    .min_h_0()
                     .items_center()
                     .gap_1()
                     .child(
                         h_flex()
-                            .w(px(20.0))
-                            .justify_center()
-                            .child(div().size_3().rounded_sm().bg(green)),
+                            .w(px(24.0))
+                            .gap_1()
+                            .items_center()
+                            .child(div().size_2().rounded_sm().bg(green))
+                            .child(div().text_xs().text_color(green).child("Y")),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .h(px(100.0))
+                            .h_full()
                             .child(SimpleLineChart::new(y_data, green)),
                     ),
             )
             // Z axis chart (with X-axis labels)
             .child(
                 h_flex()
+                    .flex_1()
+                    .min_h_0()
                     .items_center()
                     .gap_1()
                     .child(
                         h_flex()
-                            .w(px(20.0))
-                            .justify_center()
-                            .child(div().size_3().rounded_sm().bg(blue)),
+                            .w(px(24.0))
+                            .gap_1()
+                            .items_center()
+                            .child(div().size_2().rounded_sm().bg(blue))
+                            .child(div().text_xs().text_color(blue).child("Z")),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .h(px(100.0))
+                            .h_full()
                             .child(SimpleLineChart::new(z_data, blue).show_x_axis()),
                     ),
             )
@@ -274,28 +287,28 @@ impl Render for ImuViewerApp {
                 let orientation = self.smoothed_orientation;
                 let led_colors = self.led_colors;
 
-                // Main content with charts and orientation view
-                v_flex()
+                // Main content with charts on left, orientation on right
+                h_flex()
                     .flex_1()
+                    .min_h_0() // Allow shrinking below content size
                     .p_4()
                     .gap_4()
-                    // Charts row
+                    // Charts stacked on the left
                     .child(
-                        h_flex()
+                        v_flex()
                             .flex_1()
-                            .gap_4()
+                            .min_h_0() // Allow shrinking
+                            .gap_2()
                             .child(self.render_sensor_chart("Accelerometer (raw)", &accel, cx))
                             .child(self.render_sensor_chart("Gyroscope (raw)", &gyro, cx))
                             .child(self.render_sensor_chart("Magnetometer (raw)", &mag, cx)),
                     )
-                    // Orientation view row
+                    // Orientation view on the right
                     .child(
-                        h_flex().h(px(200.0)).gap_4().child(
-                            div()
-                                .flex_1()
-                                .h_full()
-                                .child(OrientationView::new(orientation, led_colors)),
-                        ),
+                        div()
+                            .w(px(400.0))
+                            .h_full()
+                            .child(OrientationView::new(orientation, led_colors)),
                     )
                     .into_any_element()
             } else {
