@@ -77,8 +77,11 @@ critical-section = "1.2.0"
 heapless         = "0.9"
 static_cell      = "2.1.1"
 
+ahrs = { version = "0.6", default-features = false }
 bmi2 = "0.1.1"
 embedded-hal = "1.0.0"
+libm = "0.2"
+nalgebra = { version = "0.31", default-features = false, features = ["libm"] }
 esp-hal-smartled = { version = "0.17.0", features = ["esp32c6"] }
 smart-leds = "0.4.0"
 

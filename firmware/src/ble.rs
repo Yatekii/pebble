@@ -97,6 +97,50 @@ impl MagBleData {
     }
 }
 
+/// AHRS orientation data packed for BLE transmission (12 bytes)
+/// Roll, pitch, yaw as f32 in degrees
+#[derive(Clone, Copy, Default)]
+pub struct AhrsBleData {
+    pub roll: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+}
+
+impl AhrsBleData {
+    pub fn to_bytes(&self) -> [u8; 12] {
+        let mut buf = [0u8; 12];
+        buf[0..4].copy_from_slice(&self.roll.to_le_bytes());
+        buf[4..8].copy_from_slice(&self.pitch.to_le_bytes());
+        buf[8..12].copy_from_slice(&self.yaw.to_le_bytes());
+        buf
+    }
+}
+
+/// GPS data packed for BLE transmission (15 bytes)
+/// latitude: f32, longitude: f32, altitude: f32, satellites: u8, fix_quality: u8, has_fix: bool
+#[derive(Clone, Copy, Default)]
+pub struct GpsBleData {
+    pub latitude: f32,
+    pub longitude: f32,
+    pub altitude: f32,
+    pub satellites: u8,
+    pub fix_quality: u8,
+    pub has_fix: bool,
+}
+
+impl GpsBleData {
+    pub fn to_bytes(&self) -> [u8; 15] {
+        let mut buf = [0u8; 15];
+        buf[0..4].copy_from_slice(&self.latitude.to_le_bytes());
+        buf[4..8].copy_from_slice(&self.longitude.to_le_bytes());
+        buf[8..12].copy_from_slice(&self.altitude.to_le_bytes());
+        buf[12] = self.satellites;
+        buf[13] = self.fix_quality;
+        buf[14] = if self.has_fix { 1 } else { 0 };
+        buf
+    }
+}
+
 /// Pebble Sensor Service GATT definition
 #[gatt_service(uuid = "12345678-1234-5678-1234-56789abcdef0")]
 pub struct SensorService {
@@ -117,6 +161,12 @@ pub struct SensorService {
     #[descriptor(uuid = "2901", read, value = "Magnetometer")]
     #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdef3", read, notify)]
     pub mag_data: [u8; 12],
+
+    /// AHRS orientation characteristic
+    /// 12 bytes: roll, pitch, yaw (all f32, little-endian, degrees)
+    #[descriptor(uuid = "2901", read, value = "Orientation")]
+    #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdef9", read, notify)]
+    pub orientation: [u8; 12],
 
     /// LED control characteristic
     /// Write format: [brightness, led_index, r, g, b] or [brightness, 0xFF, r, g, b] to set all LEDs
@@ -148,11 +198,17 @@ pub struct SensorService {
     #[descriptor(uuid = "2901", read, value = "LED Colors 48-71")]
     #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdef8", read, write, notify)]
     pub led_colors_2: LedColorChunk,
+
+    /// GPS data characteristic
+    /// 15 bytes: latitude (f32), longitude (f32), altitude (f32), satellites (u8), fix_quality (u8), has_fix (u8)
+    #[descriptor(uuid = "2901", read, value = "GPS Position")]
+    #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefa", read, notify)]
+    pub gps_data: [u8; 15],
 }
 
 /// GATT Server with Sensor Service
-/// attribute_table_size: 8 characteristics × 3 attrs + 8 descriptors + service + GAP = ~40
-#[gatt_server(attribute_table_size = 64)]
+/// attribute_table_size: 11 characteristics × 4 attrs + service + GAP = ~52
+#[gatt_server(attribute_table_size = 128)]
 pub struct SensorServer {
     pub sensor_service: SensorService,
 }

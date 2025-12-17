@@ -32,6 +32,7 @@ mod reg {
     pub const INIT_ADDR_1: u8 = 0x5C;
     pub const INIT_DATA: u8 = 0x5E;
     pub const AUX_IF_TRIM: u8 = 0x68;
+    #[allow(dead_code)]
     pub const IF_CONF: u8 = 0x6B;
     pub const PWR_CONF: u8 = 0x7C;
     pub const PWR_CTRL: u8 = 0x7D;
@@ -137,6 +138,33 @@ pub struct ImuData {
     pub gyr_x: i16,
     pub gyr_y: i16,
     pub gyr_z: i16,
+}
+
+impl ImuData {
+    /// Convert accelerometer readings to g (assuming +/-8g range)
+    /// BMI270 with 8g range: 1g = 4096 LSB
+    pub fn accel_g(&self) -> (f32, f32, f32) {
+        const SCALE: f32 = 1.0 / 4096.0; // 8g range
+        (
+            self.acc_x as f32 * SCALE,
+            self.acc_y as f32 * SCALE,
+            self.acc_z as f32 * SCALE,
+        )
+    }
+
+    /// Convert gyroscope readings to rad/s (assuming +/-2000 dps range)
+    /// BMI270 with 2000dps range: 1 dps = 16.384 LSB
+    pub fn gyro_rads(&self) -> (f32, f32, f32) {
+        // Convert to degrees per second first, then to radians
+        const DPS_SCALE: f32 = 1.0 / 16.384; // 2000 dps range
+        const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+        const SCALE: f32 = DPS_SCALE * DEG_TO_RAD;
+        (
+            self.gyr_x as f32 * SCALE,
+            self.gyr_y as f32 * SCALE,
+            self.gyr_z as f32 * SCALE,
+        )
+    }
 }
 
 /// Magnetometer data (raw 24-bit signed values)
@@ -501,69 +529,154 @@ where
         &mut self,
         delay: &mut D,
     ) -> Result<(), Error<E>> {
-        defmt::info!("=== Scanning AUX I2C bus ===");
+        defmt::info!("=== Initializing BMM350 via AUX I2C ===");
 
-        // 1. Disable power save
+        // 1. Disable advanced power save mode (required for aux interface)
+        defmt::info!("Step 1: Disable power save");
         self.write_reg(reg::PWR_CONF, 0x00)?;
         delay.delay_ms(1);
 
-        // 2. Enable aux power
+        // 2. Enable auxiliary power in PWR_CTRL (bit 0 = aux_en)
+        defmt::info!("Step 2: Enable AUX power");
         let pwr = self.read_reg(reg::PWR_CTRL)?;
+        defmt::info!("  PWR_CTRL before: {:#x}", pwr);
         self.write_reg(reg::PWR_CTRL, pwr | 0x01)?;
         delay.delay_ms(10);
+        let pwr_after = self.read_reg(reg::PWR_CTRL)?;
+        defmt::info!("  PWR_CTRL after: {:#x}", pwr_after);
 
-        // 3. Pull-up 2k
+        // 3. Configure AUX interface pull-ups (stronger pull-up for reliable communication)
+        defmt::info!("Step 3: Configure pull-ups");
         let trim = self.read_reg(reg::AUX_IF_TRIM)?;
-        self.write_reg(reg::AUX_IF_TRIM, (trim & 0xFC) | 0x03)?;
+        defmt::info!("  AUX_IF_TRIM before: {:#x}", trim);
+        // bits 1:0 = asda_pupsel: 00=off, 01=40k, 10=10k, 11=2k
+        // Also set bits 3:2 for SCL pull-up (ascx_pupsel)
+        self.write_reg(reg::AUX_IF_TRIM, (trim & 0xF0) | 0x0F)?; // 2k pull-up on both SDA and SCL
+        delay.delay_ms(5);
+        let trim_after = self.read_reg(reg::AUX_IF_TRIM)?;
+        defmt::info!("  AUX_IF_TRIM after: {:#x}", trim_after);
+
+        // 4. Set BMM350 I2C address (0x14 << 1 = 0x28)
+        defmt::info!("Step 4: Set AUX device address to 0x14 (shifted: 0x28)");
+        self.write_reg(reg::AUX_DEV_ID, BMM350_I2C_ADDR << 1)?;
         delay.delay_ms(1);
 
-        // 4. Manual mode
-        self.write_reg(reg::AUX_IF_CONF, 0x80)?;
+        // 5. Configure AUX interface: manual mode, FCU write enable, 8-byte burst
+        defmt::info!("Step 5: Enable manual mode with FCU write");
+        // AUX_IF_CONF register bits:
+        //   bit 7 = aux_manual_en (1 = manual mode)
+        //   bit 6 = aux_fcu_write_en (1 = enable FCU write commands)
+        //   bits 3:2 = man_rd_burst (burst length for manual mode: 0=1, 1=2, 2=6, 3=8 bytes)
+        //   bits 1:0 = aux_rd_burst (burst length for data mode: 0=1, 1=2, 2=6, 3=8 bytes)
+        // Set: manual_en=1, fcu_write_en=1, man_rd_burst=3 (8 bytes), aux_rd_burst=3 (8 bytes)
+        self.write_reg(reg::AUX_IF_CONF, 0x80 | 0x40 | (0x03 << 2) | 0x03)?;
         delay.delay_ms(1);
 
-        // Scan all addresses 0x08-0x77
-        defmt::info!("Scanning addresses 0x08 to 0x77...");
-        for addr in 0x08u8..=0x77 {
-            // Set address (shifted)
-            self.write_reg(reg::AUX_DEV_ID, addr << 1)?;
-
-            // Clear error
-            let _ = self.read_reg(reg::ERR_REG)?;
-
-            // Trigger read
-            self.write_reg(reg::AUX_RD_ADDR, 0x00)?;
-            delay.delay_ms(2);
-
-            // Check error
-            let err = self.read_reg(reg::ERR_REG)?;
-
-            if (err & 0x80) == 0 {
-                // No aux_err - device responded!
-                let mut buf = [0u8; 1];
-                self.read_regs(reg::AUX_DATA_0, &mut buf)?;
-                defmt::info!("Found device at {:#x}! Data: {:#x}", addr, buf[0]);
-            }
-        }
-        defmt::info!("Scan complete.");
-
-        // Now try BMM350 at 0x14
-        self.write_reg(reg::AUX_DEV_ID, 0x28)?;
+        // 6. Configure AUX_CONF with ODR
+        defmt::info!("Step 6: Configure AUX_CONF ODR");
+        // AUX_CONF register (0x44): bits 3:0 = aux_odr
+        // ODR values: 0x05=50Hz, 0x06=100Hz, 0x07=200Hz, 0x08=400Hz
+        self.write_reg(reg::AUX_CONF, 0x06)?; // 100Hz
         delay.delay_ms(1);
+
+        // 7. Wait for BMM350 startup (3ms from power-on)
+        defmt::info!("Step 7: Wait for BMM350 startup (5ms)");
+        delay.delay_ms(5);
+
+        // 7. Check BMI270 status and error registers
+        let status = self.read_reg(reg::STATUS)?;
+        let err = self.read_reg(reg::ERR_REG)?;
+        let if_conf = self.read_reg(reg::IF_CONF)?;
+        let aux_if_conf = self.read_reg(reg::AUX_IF_CONF)?;
+        let aux_dev_id = self.read_reg(reg::AUX_DEV_ID)?;
+        let pwr_ctrl = self.read_reg(reg::PWR_CTRL)?;
+        let pwr_conf = self.read_reg(reg::PWR_CONF)?;
+
+        defmt::info!("  STATUS: {:#x}, ERR_REG: {:#x}", status, err);
+        defmt::info!("  IF_CONF: {:#x}, AUX_IF_CONF: {:#x}", if_conf, aux_if_conf);
+        defmt::info!(
+            "  AUX_DEV_ID: {:#x}, PWR_CTRL: {:#x}, PWR_CONF: {:#x}",
+            aux_dev_id,
+            pwr_ctrl,
+            pwr_conf
+        );
+        defmt::info!(
+            "  aux_busy={}, drdy_aux={}, aux_err={}",
+            (status >> 2) & 1,
+            (status >> 4) & 1,
+            (err >> 7) & 1
+        );
+
+        // 8. Try to read chip ID from BMM350
+        defmt::info!("Step 8: Reading BMM350 chip ID...");
+
+        // Clear any previous error
         let _ = self.read_reg(reg::ERR_REG)?;
-        self.write_reg(reg::AUX_RD_ADDR, 0x00)?;
-        delay.delay_ms(20);
 
+        // Set read address to chip ID register (0x00)
+        self.write_reg(reg::AUX_RD_ADDR, 0x00)?;
+        delay.delay_ms(5);
+
+        // Check status after triggering read
+        let status = self.read_reg(reg::STATUS)?;
+        let err = self.read_reg(reg::ERR_REG)?;
+        defmt::info!(
+            "  After read trigger - STATUS: {:#x}, ERR_REG: {:#x}",
+            status,
+            err
+        );
+
+        // Read the data
         let mut buf = [0u8; 8];
         self.read_regs(reg::AUX_DATA_0, &mut buf)?;
-
-        let err = self.read_reg(reg::ERR_REG)?;
-        defmt::info!("BMM350 (0x14): data={:?}, err={:#x}", buf, err);
+        defmt::info!("  AUX_DATA: {:?}", buf);
 
         let chip_id = buf[0];
+        defmt::info!(
+            "  Chip ID read: {:#x} (expected: {:#x})",
+            chip_id,
+            BMM350_CHIP_ID
+        );
 
-        if chip_id != BMM350_CHIP_ID {
+        // If aux_err is set, scan for devices
+        if (err & 0x80) != 0 {
+            defmt::warn!("AUX error detected - BMM350 not responding at 0x14");
+            defmt::info!("Scanning AUX I2C bus for devices (0x08-0x77)...");
+
+            for addr in 0x08u8..=0x77 {
+                // Set address (shifted left by 1)
+                self.write_reg(reg::AUX_DEV_ID, addr << 1)?;
+                delay.delay_ms(1);
+
+                // Clear error
+                let _ = self.read_reg(reg::ERR_REG)?;
+
+                // Trigger read of register 0x00
+                self.write_reg(reg::AUX_RD_ADDR, 0x00)?;
+                delay.delay_ms(3);
+
+                // Check for error
+                let scan_err = self.read_reg(reg::ERR_REG)?;
+                if (scan_err & 0x80) == 0 {
+                    let mut scan_buf = [0u8; 1];
+                    self.read_regs(reg::AUX_DATA_0, &mut scan_buf)?;
+                    defmt::info!("  Found device at {:#x}, chip_id={:#x}", addr, scan_buf[0]);
+                }
+            }
+
             return Err(Error::InvalidChipId(chip_id));
         }
+
+        if chip_id != BMM350_CHIP_ID {
+            defmt::warn!(
+                "Wrong chip ID: {:#x}, expected {:#x}",
+                chip_id,
+                BMM350_CHIP_ID
+            );
+            return Err(Error::InvalidChipId(chip_id));
+        }
+
+        defmt::info!("BMM350 chip ID verified: {:#x}", chip_id);
 
         // Soft reset BMM350 via CMD register (0x7E)
         defmt::info!("Performing BMM350 soft reset...");

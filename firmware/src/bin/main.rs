@@ -20,8 +20,8 @@ use esp_hal::delay::Delay;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
-use pebble::ble::{AccBleData, GyroBleData, MagBleData, SensorServer};
-use pebble::hal::{imu, led};
+use pebble::ble::{AccBleData, AhrsBleData, GpsBleData, GyroBleData, MagBleData, SensorServer};
+use pebble::hal::{ahrs::AhrsFilter, gps, imu, led};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
@@ -36,11 +36,15 @@ struct SensorData {
     acc: AccBleData,
     gyro: GyroBleData,
     mag: MagBleData,
+    orientation: AhrsBleData,
     valid: bool,
 }
 
 /// Watch for broadcasting sensor data to multiple connection handlers
 static SENSOR_DATA: Watch<CriticalSectionRawMutex, SensorData, 2> = Watch::new();
+
+/// Watch for broadcasting GPS data to multiple connection handlers
+static GPS_DATA: Watch<CriticalSectionRawMutex, GpsBleData, 2> = Watch::new();
 
 /// LED command: [brightness, led_index (0xFF = all), r, g, b]
 #[derive(Clone, Copy, Default)]
@@ -140,6 +144,10 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
+    // Initialize GPS on UART1 (GPIO8=RX, GPIO18=TX)
+    let mut gps = gps::init(peripherals.UART1, peripherals.GPIO8, peripherals.GPIO18);
+    info!("GPS initialized on UART1");
+
     // Initialize BLE
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
 
@@ -177,15 +185,37 @@ async fn main(_spawner: Spawner) -> ! {
         let _ = runner.run().await;
     };
 
-    // Task to read IMU and broadcast sensor data
+    // Task to read IMU data, apply AHRS filter, and broadcast sensor data
     let imu_task = async {
+        // Create AHRS filter (Madgwick algorithm)
+        // Sample period = 10ms (100Hz), beta = 0.1 (moderate responsiveness)
+        let mut ahrs = AhrsFilter::new();
+        let mut sample_count: u32 = 0;
+
         loop {
+            // Read IMU data
             let imu_result = imu.read();
             let mag_result = imu.read_mag();
 
             let mut data = SensorData::default();
 
             if let Ok(imu_data) = &imu_result {
+                // Convert to physical units and update AHRS filter
+                let accel = imu_data.accel_g();
+                let gyro = imu_data.gyro_rads();
+
+                // Update AHRS filter with IMU data
+                let orientation = ahrs.update_imu(accel, gyro);
+
+                // Log orientation periodically (every 50 samples = 5 seconds)
+                sample_count += 1;
+                if sample_count % 50 == 0 {
+                    info!(
+                        "AHRS: roll={} pitch={} yaw={}",
+                        orientation.roll as i32, orientation.pitch as i32, orientation.yaw as i32
+                    );
+                }
+
                 data.acc = AccBleData {
                     x: imu_data.acc_x,
                     y: imu_data.acc_y,
@@ -195,6 +225,11 @@ async fn main(_spawner: Spawner) -> ! {
                     x: imu_data.gyr_x,
                     y: imu_data.gyr_y,
                     z: imu_data.gyr_z,
+                };
+                data.orientation = AhrsBleData {
+                    roll: orientation.roll,
+                    pitch: orientation.pitch,
+                    yaw: orientation.yaw,
                 };
                 data.valid = true;
             }
@@ -210,22 +245,43 @@ async fn main(_spawner: Spawner) -> ! {
             // Broadcast to all waiting connections
             SENSOR_DATA.sender().send(data);
 
-            // Log data locally
-            if let (Ok(imu_data), Ok(mag_data)) = (&imu_result, &mag_result) {
-                info!(
-                    "acc=({}, {}, {}) gyr=({}, {}, {}) mag=({}, {}, {})",
-                    imu_data.acc_x,
-                    imu_data.acc_y,
-                    imu_data.acc_z,
-                    imu_data.gyr_x,
-                    imu_data.gyr_y,
-                    imu_data.gyr_z,
-                    mag_data.x,
-                    mag_data.y,
-                    mag_data.z
-                );
-            }
+            Timer::after(Duration::from_millis(100)).await;
+        }
+    };
 
+    // Task to read GPS data by polling FIFO
+    let gps_task = async {
+        info!("GPS task started");
+
+        loop {
+            if let Some(gps_data) = gps.poll() {
+                if gps_data.position.has_fix() {
+                    info!(
+                        "GPS: lat={} lon={} alt={}m sats={} fix={:?}",
+                        gps_data.position.latitude,
+                        gps_data.position.longitude,
+                        gps_data.position.altitude,
+                        gps_data.position.satellites,
+                        gps_data.position.fix_quality
+                    );
+                } else {
+                    info!(
+                        "GPS: waiting for fix (sats={})",
+                        gps_data.position.satellites
+                    );
+                }
+
+                // Broadcast GPS data for BLE
+                GPS_DATA.sender().send(GpsBleData {
+                    latitude: gps_data.position.latitude,
+                    longitude: gps_data.position.longitude,
+                    altitude: gps_data.position.altitude,
+                    satellites: gps_data.position.satellites,
+                    fix_quality: gps_data.position.fix_quality as u8,
+                    has_fix: gps_data.position.has_fix(),
+                });
+            }
+            // Poll every 100ms - FIFO is 128 bytes, at 9600 baud we get ~960 bytes/sec
             Timer::after(Duration::from_millis(100)).await;
         }
     };
@@ -550,6 +606,17 @@ async fn main(_spawner: Spawner) -> ! {
                     {
                         break;
                     }
+
+                    // Send orientation (AHRS)
+                    if server
+                        .sensor_service
+                        .orientation
+                        .notify(&conn, &data.orientation.to_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             };
 
@@ -627,7 +694,26 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             };
 
-            embassy_futures::select::select3(gatt_events, sensor_notify, led_notify).await;
+            // Task to send GPS notifications to this connection
+            let gps_notify = async {
+                let mut receiver = GPS_DATA.receiver().unwrap();
+                loop {
+                    let data = receiver.changed().await;
+
+                    if server
+                        .sensor_service
+                        .gps_data
+                        .notify(&conn, &data.to_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+
+            embassy_futures::select::select4(gatt_events, sensor_notify, led_notify, gps_notify)
+                .await;
 
             let remaining = ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed) - 1;
             info!("Client disconnected ({} remaining)", remaining);
@@ -671,8 +757,14 @@ async fn main(_spawner: Spawner) -> ! {
     };
 
     // Run all tasks concurrently
-    embassy_futures::join::join5(runner_task, imu_task, ble_task, led_task, led_ble_sync_task)
-        .await;
+    embassy_futures::join::join5(
+        runner_task,
+        embassy_futures::join::join(imu_task, gps_task),
+        ble_task,
+        led_task,
+        led_ble_sync_task,
+    )
+    .await;
 
     loop {
         Timer::after(Duration::from_secs(1)).await;
