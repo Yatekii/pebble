@@ -1,4 +1,4 @@
-//! Simple line chart wrapper with Y-axis tick marks.
+//! Simple line chart wrapper with Y-axis tick marks and multiple series support.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -6,39 +6,48 @@ use gpui_component::ActiveTheme;
 
 const SAMPLES_PER_SECOND: usize = 20; // 20 Hz sample rate
 
-/// A wrapper around data that renders a line chart with Y-axis tick labels.
+/// A single data series with its color and label.
+#[derive(Clone)]
+pub struct Series {
+    pub data: Vec<f64>,
+    pub color: Hsla,
+    pub label: &'static str,
+}
+
+/// A line chart that can display multiple data series.
 #[derive(IntoElement)]
-pub struct SimpleLineChart {
-    data: Vec<f64>,
-    color: Hsla,
+pub struct MultiLineChart {
+    series: Vec<Series>,
     show_x_axis: bool,
 }
 
-impl SimpleLineChart {
-    pub fn new(data: Vec<f64>, color: Hsla) -> Self {
+impl MultiLineChart {
+    pub fn new(series: Vec<Series>) -> Self {
         Self {
-            data,
-            color,
-            show_x_axis: false,
+            series,
+            show_x_axis: true,
         }
     }
 
-    pub fn show_x_axis(mut self) -> Self {
-        self.show_x_axis = true;
-        self
-    }
+    fn calc_range(series: &[Series]) -> (f64, f64) {
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
 
-    fn calc_range(data: &[f64]) -> (f64, f64) {
-        if data.is_empty() {
+        for s in series {
+            for &val in &s.data {
+                min = min.min(val);
+                max = max.max(val);
+            }
+        }
+
+        if min == f64::INFINITY {
             return (-1.0, 1.0);
         }
-        let min = data.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        // Ensure we have some range and include 0
-        let min = min.min(0.0);
-        let max = max.max(0.0);
-        let range = (max - min).max(0.001);
-        (min - range * 0.05, max + range * 0.05)
+
+        // Use symmetric range: max(abs(min), abs(max)) for both directions
+        let abs_max = min.abs().max(max.abs()).max(0.001);
+        let symmetric_max = abs_max * 1.05; // Add 5% padding
+        (-symmetric_max, symmetric_max)
     }
 
     fn format_value(val: f64) -> String {
@@ -67,67 +76,119 @@ impl SimpleLineChart {
     }
 }
 
-impl RenderOnce for SimpleLineChart {
+impl RenderOnce for MultiLineChart {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let (min_val, max_val) = Self::calc_range(&self.data);
+        let (min_val, max_val) = Self::calc_range(&self.series);
         let range = max_val - min_val;
         let y_ticks = Self::y_tick_values(min_val, max_val);
 
-        let data = self.data;
-        let color = self.color;
+        let series = self.series;
         let grid_color = theme.border;
         let muted_color = theme.muted_foreground;
         let show_x_axis = self.show_x_axis;
 
         // Calculate X-axis ticks (every second)
-        let num_samples = data.len();
+        let num_samples = series.first().map(|s| s.data.len()).unwrap_or(0);
         let total_seconds = num_samples / SAMPLES_PER_SECOND;
+
+        // Create legend items
+        let legend_items: Vec<_> = series.iter().map(|s| (s.color, s.label)).collect();
 
         div()
             .size_full()
             .flex()
             .flex_col()
             .child(
+                // Legend row
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_3()
+                    .pb_1()
+                    .children(legend_items.into_iter().map(|(color, label)| {
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(div().size(px(8.0)).rounded_sm().bg(color))
+                            .child(div().text_xs().text_color(color).child(label.to_string()))
+                    })),
+            )
+            .child(
                 // Main chart row
                 div()
                     .flex_1()
+                    .min_h_0()
                     .flex()
                     .flex_row()
-                    // Y-axis labels column
-                    .child(
-                        div()
-                            .w(px(45.0))
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .justify_between()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .children(
-                                y_ticks
-                                    .iter()
-                                    .rev()
-                                    .map(|&val| {
-                                        div().text_right().pr_1().child(Self::format_value(val))
-                                    })
-                                    .collect::<Vec<_>>(),
-                            ),
-                    )
+                    // Y-axis labels column - use canvas for precise positioning
+                    .child({
+                        let y_ticks_for_labels = y_ticks.clone();
+                        canvas(
+                            move |bounds, _window, _cx| {
+                                (bounds, y_ticks_for_labels.clone(), min_val, range)
+                            },
+                            move |_bounds, (bounds, y_ticks, min_val, range), window, cx| {
+                                let origin = bounds.origin;
+                                let height = bounds.size.height;
+                                let width = bounds.size.width;
+
+                                for &tick_val in &y_ticks {
+                                    let y_t = ((tick_val - min_val) / range) as f32;
+                                    let y = origin.y + height - height * y_t;
+
+                                    let label = Self::format_value(tick_val);
+                                    // Position text so it's vertically centered on the tick line
+                                    let text_origin = point(origin.x, y - px(5.0));
+
+                                    let text_run = TextRun {
+                                        len: label.len(),
+                                        font: window.text_style().font(),
+                                        color: muted_color,
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    };
+
+                                    if let Ok(shaped) = window.text_system().shape_text(
+                                        label.into(),
+                                        px(10.0),
+                                        &[text_run],
+                                        Some(width),
+                                        None,
+                                    ) {
+                                        for line in shaped {
+                                            let _ = line.paint(
+                                                text_origin,
+                                                px(10.0),
+                                                TextAlign::Right,
+                                                None,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                        .w(px(45.0))
+                        .h_full()
+                    })
                     // Chart area
                     .child(
                         canvas(
                             {
                                 let y_ticks = y_ticks.clone();
+                                let series = series.clone();
                                 move |bounds, _window, _cx| {
                                     (
                                         bounds,
-                                        data.clone(),
+                                        series.clone(),
                                         min_val,
-                                        max_val,
                                         range,
                                         y_ticks.clone(),
-                                        color,
                                         grid_color,
                                         show_x_axis,
                                     )
@@ -136,20 +197,15 @@ impl RenderOnce for SimpleLineChart {
                             move |_bounds, prepaint_state, window, _cx| {
                                 let (
                                     bounds,
-                                    data,
+                                    series,
                                     min_val,
-                                    _max_val,
                                     range,
                                     y_ticks,
-                                    color,
                                     grid_color,
                                     show_x_axis,
                                 ) = prepaint_state;
 
-                                if data.is_empty()
-                                    || bounds.size.width <= px(0.0)
-                                    || bounds.size.height <= px(0.0)
-                                {
+                                if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
                                     return;
                                 }
 
@@ -172,13 +228,17 @@ impl RenderOnce for SimpleLineChart {
                                     }
                                 }
 
+                                // Get max data length across all series
+                                let max_len =
+                                    series.iter().map(|s| s.data.len()).max().unwrap_or(0);
+
                                 // Draw vertical grid lines every second (only if showing x-axis)
-                                if show_x_axis && data.len() > SAMPLES_PER_SECOND {
-                                    let num_seconds = data.len() / SAMPLES_PER_SECOND;
+                                if show_x_axis && max_len > SAMPLES_PER_SECOND {
+                                    let num_seconds = max_len / SAMPLES_PER_SECOND;
                                     for s in 1..=num_seconds {
                                         let sample_idx = s * SAMPLES_PER_SECOND;
-                                        if sample_idx < data.len() {
-                                            let x_t = sample_idx as f32 / (data.len() - 1) as f32;
+                                        if sample_idx < max_len {
+                                            let x_t = sample_idx as f32 / (max_len - 1) as f32;
                                             let x = origin.x + width * x_t;
 
                                             let mut builder = PathBuilder::stroke(px(1.0));
@@ -191,26 +251,28 @@ impl RenderOnce for SimpleLineChart {
                                     }
                                 }
 
-                                // Draw the data line
-                                if data.len() >= 2 {
-                                    let mut builder = PathBuilder::stroke(px(2.0));
+                                // Draw each series
+                                for s in &series {
+                                    if s.data.len() >= 2 {
+                                        let mut builder = PathBuilder::stroke(px(2.0));
 
-                                    for (i, &val) in data.iter().enumerate() {
-                                        let x_t = i as f32 / (data.len() - 1) as f32;
-                                        let x = origin.x + width * x_t;
+                                        for (i, &val) in s.data.iter().enumerate() {
+                                            let x_t = i as f32 / (s.data.len() - 1) as f32;
+                                            let x = origin.x + width * x_t;
 
-                                        let y_t = ((val - min_val) / range) as f32;
-                                        let y = origin.y + height - height * y_t;
+                                            let y_t = ((val - min_val) / range) as f32;
+                                            let y = origin.y + height - height * y_t;
 
-                                        if i == 0 {
-                                            builder.move_to(point(x, y));
-                                        } else {
-                                            builder.line_to(point(x, y));
+                                            if i == 0 {
+                                                builder.move_to(point(x, y));
+                                            } else {
+                                                builder.line_to(point(x, y));
+                                            }
                                         }
-                                    }
 
-                                    if let Ok(path) = builder.build() {
-                                        window.paint_path(path, color);
+                                        if let Ok(path) = builder.build() {
+                                            window.paint_path(path, s.color);
+                                        }
                                     }
                                 }
                             },

@@ -6,7 +6,7 @@ use gpui_component_assets::Assets;
 use parking_lot::Mutex;
 
 use crate::ble::{BleMessage, BleState, ConnectionState, LedColors, start_ble_client};
-use crate::chart::SimpleLineChart;
+use crate::chart::{MultiLineChart, Series};
 use crate::data::ImuReading;
 use crate::orientation::{Orientation, OrientationView, calculate_orientation, smooth_orientation};
 
@@ -128,11 +128,29 @@ impl ImuViewerApp {
         let green = hsla(0.33, 0.7, 0.45, 1.0);
         let blue = hsla(0.6, 0.7, 0.5, 1.0);
 
+        let series = vec![
+            Series {
+                data: x_data,
+                color: red,
+                label: "X",
+            },
+            Series {
+                data: y_data,
+                color: green,
+                label: "Y",
+            },
+            Series {
+                data: z_data,
+                color: blue,
+                label: "Z",
+            },
+        ];
+
         v_flex()
             .flex_1()
             .min_h_0()
+            .h_full()
             .p_2()
-            .gap_1()
             .bg(theme.background)
             .border_1()
             .border_color(theme.border)
@@ -144,71 +162,12 @@ impl ImuViewerApp {
                     .text_color(theme.foreground)
                     .child(title.to_string()),
             )
-            // X axis chart
             .child(
-                h_flex()
+                div()
                     .flex_1()
                     .min_h_0()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .w(px(24.0))
-                            .gap_1()
-                            .items_center()
-                            .child(div().size_2().rounded_sm().bg(red))
-                            .child(div().text_xs().text_color(red).child("X")),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .child(SimpleLineChart::new(x_data, red)),
-                    ),
-            )
-            // Y axis chart
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .w(px(24.0))
-                            .gap_1()
-                            .items_center()
-                            .child(div().size_2().rounded_sm().bg(green))
-                            .child(div().text_xs().text_color(green).child("Y")),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .child(SimpleLineChart::new(y_data, green)),
-                    ),
-            )
-            // Z axis chart (with X-axis labels)
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .w(px(24.0))
-                            .gap_1()
-                            .items_center()
-                            .child(div().size_2().rounded_sm().bg(blue))
-                            .child(div().text_xs().text_color(blue).child("Z")),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .child(SimpleLineChart::new(z_data, blue).show_x_axis()),
-                    ),
+                    .h_full()
+                    .child(MultiLineChart::new(series)),
             )
     }
 
@@ -291,12 +250,14 @@ impl Render for ImuViewerApp {
                 h_flex()
                     .flex_1()
                     .min_h_0() // Allow shrinking below content size
+                    .h_full()
                     .p_4()
                     .gap_4()
                     // Charts stacked on the left
                     .child(
                         v_flex()
                             .flex_1()
+                            .h_full()
                             .min_h_0() // Allow shrinking
                             .gap_2()
                             .child(self.render_sensor_chart("Accelerometer (raw)", &accel, cx))
