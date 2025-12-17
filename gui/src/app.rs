@@ -352,6 +352,8 @@ impl Render for ImuViewerApp {
                                     latitude: self.gps_reading.latitude as f64,
                                     longitude: self.gps_reading.longitude as f64,
                                 },
+                                self.gps_reading.satellites,
+                                self.gps_reading.has_fix,
                             ))),
                     )
                     .into_any_element()

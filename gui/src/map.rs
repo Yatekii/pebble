@@ -38,11 +38,18 @@ fn tile_url(x: u32, y: u32, zoom: u32) -> String {
 pub struct MapViewElement {
     position: GpsPosition,
     zoom: u32,
+    satellites: u8,
+    has_fix: bool,
 }
 
 impl MapViewElement {
-    pub fn new(position: GpsPosition) -> Self {
-        Self { position, zoom: 15 }
+    pub fn new(position: GpsPosition, satellites: u8, has_fix: bool) -> Self {
+        Self {
+            position,
+            zoom: 15,
+            satellites,
+            has_fix,
+        }
     }
 }
 
@@ -119,6 +126,7 @@ impl RenderOnce for MapViewElement {
             );
 
         // Build the coordinates overlay
+        let fix_indicator = if self.has_fix { "●" } else { "○" };
         let coords = div()
             .absolute()
             .bottom_2()
@@ -130,8 +138,8 @@ impl RenderOnce for MapViewElement {
             .text_xs()
             .text_color(hsla(0.0, 0.0, 1.0, 1.0))
             .child(format!(
-                "{:.4}, {:.4} (z{})",
-                position.latitude, position.longitude, zoom
+                "{:.4}, {:.4} | {} {} sats",
+                position.latitude, position.longitude, fix_indicator, self.satellites
             ));
 
         // Corner masks - draw filled paths that cover the corners outside the rounded area
