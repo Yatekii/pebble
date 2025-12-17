@@ -16,13 +16,12 @@ use embassy_sync::watch::Watch;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
-use esp_hal::i2c::master::{Config as I2cConfig, I2c};
-use esp_hal::time::Rate;
+
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
 use pebble::ble::{AccBleData, GyroBleData, MagBleData, SensorServer};
-use pebble::hal::imu;
+use pebble::hal::{imu, led};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
@@ -42,6 +41,24 @@ struct SensorData {
 
 /// Watch for broadcasting sensor data to multiple connection handlers
 static SENSOR_DATA: Watch<CriticalSectionRawMutex, SensorData, 2> = Watch::new();
+
+/// LED command: [brightness, led_index (0xFF = all), r, g, b]
+#[derive(Clone, Copy, Default)]
+struct LedCommand {
+    brightness: u8,
+    led_index: u8,
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+/// Watch for LED commands from BLE
+static LED_COMMAND: Watch<CriticalSectionRawMutex, LedCommand, 2> = Watch::new();
+
+/// LED color chunks (24 LEDs * 3 bytes = 72 bytes each)
+static LED_COLORS_0: Watch<CriticalSectionRawMutex, [u8; 72], 2> = Watch::new();
+static LED_COLORS_1: Watch<CriticalSectionRawMutex, [u8; 72], 2> = Watch::new();
+static LED_COLORS_2: Watch<CriticalSectionRawMutex, [u8; 72], 2> = Watch::new();
 
 /// Track number of active connections
 static ACTIVE_CONNECTIONS: AtomicU8 = AtomicU8::new(0);
@@ -70,6 +87,38 @@ async fn main(_spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
     info!("Embassy initialized!");
+
+    // Initialize LEDs
+    static LED_BUFFER: static_cell::StaticCell<[esp_hal::rmt::PulseCode; led::LED_BUFFER_SIZE]> =
+        static_cell::StaticCell::new();
+    let led_buffer = LED_BUFFER.init(esp_hal_smartled::smart_led_buffer!(led::NUM_LEDS));
+    let mut leds = match led::init(peripherals.RMT, peripherals.GPIO15, led_buffer) {
+        Ok(leds) => {
+            info!("LEDs initialized successfully");
+            leds
+        }
+        Err(e) => {
+            defmt::panic!("Failed to initialize LEDs: {:?}", e);
+        }
+    };
+
+    // Set initial LED state: all green at 2% brightness
+    leds.set_brightness(5);
+    leds.set_all(led::Color::green());
+    if let Err(_e) = leds.show() {
+        info!("Failed to update LEDs");
+    } else {
+        info!("LEDs initialized: all green at 2% brightness");
+    }
+
+    // Send initial LED command state
+    LED_COMMAND.sender().send(LedCommand {
+        brightness: 5,
+        led_index: 0xFF,
+        r: 0,
+        g: 255,
+        b: 0,
+    });
 
     // Initialize IMU
     let mut delay = Delay::new();
@@ -181,6 +230,142 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
+    // Set initial LED characteristic values to match physical state
+    let initial_led_state = [5u8, 0xFF, 0, 255, 0]; // brightness=5, all LEDs, green
+    let _ = server
+        .sensor_service
+        .led_control
+        .set(server, &initial_led_state);
+    let _ = server.sensor_service.led_brightness.set(server, &5u8);
+
+    // Initialize LED color chunks to match physical state
+    // All 72 LEDs are green
+    let mut green_chunk = [0u8; 72];
+    for i in 0..24 {
+        green_chunk[i * 3] = 0; // R
+        green_chunk[i * 3 + 1] = 255; // G
+        green_chunk[i * 3 + 2] = 0; // B
+    }
+    let _ = server
+        .sensor_service
+        .led_colors_0
+        .set(server, &pebble::ble::LedColorChunk(green_chunk));
+    let _ = server
+        .sensor_service
+        .led_colors_1
+        .set(server, &pebble::ble::LedColorChunk(green_chunk));
+    let _ = server
+        .sensor_service
+        .led_colors_2
+        .set(server, &pebble::ble::LedColorChunk(green_chunk));
+
+    // Task to handle LED commands from BLE
+    let led_task = async {
+        let mut receiver = LED_COMMAND.receiver().unwrap();
+        let mut current_brightness: u8 = 5;
+
+        loop {
+            let cmd = receiver.changed().await;
+
+            match cmd.led_index {
+                0xFE => {
+                    // Brightness only update
+                    current_brightness = cmd.brightness;
+                    leds.set_brightness(current_brightness);
+                    let _ = server
+                        .sensor_service
+                        .led_brightness
+                        .set(server, &current_brightness);
+                }
+                0xF0 => {
+                    // Chunk 0: LEDs 0-23
+                    let colors = LED_COLORS_0
+                        .receiver()
+                        .unwrap()
+                        .try_get()
+                        .unwrap_or([0u8; 72]);
+                    for i in 0..24 {
+                        let r = colors[i * 3];
+                        let g = colors[i * 3 + 1];
+                        let b = colors[i * 3 + 2];
+                        leds.set(i, led::Color::new(r, g, b));
+                    }
+                    let _ = server
+                        .sensor_service
+                        .led_colors_0
+                        .set(server, &pebble::ble::LedColorChunk(colors));
+                }
+                0xF1 => {
+                    // Chunk 1: LEDs 24-47
+                    let colors = LED_COLORS_1
+                        .receiver()
+                        .unwrap()
+                        .try_get()
+                        .unwrap_or([0u8; 72]);
+                    for i in 0..24 {
+                        let r = colors[i * 3];
+                        let g = colors[i * 3 + 1];
+                        let b = colors[i * 3 + 2];
+                        leds.set(24 + i, led::Color::new(r, g, b));
+                    }
+                    let _ = server
+                        .sensor_service
+                        .led_colors_1
+                        .set(server, &pebble::ble::LedColorChunk(colors));
+                }
+                0xF2 => {
+                    // Chunk 2: LEDs 48-71
+                    let colors = LED_COLORS_2
+                        .receiver()
+                        .unwrap()
+                        .try_get()
+                        .unwrap_or([0u8; 72]);
+                    for i in 0..24 {
+                        let r = colors[i * 3];
+                        let g = colors[i * 3 + 1];
+                        let b = colors[i * 3 + 2];
+                        leds.set(48 + i, led::Color::new(r, g, b));
+                    }
+                    let _ = server
+                        .sensor_service
+                        .led_colors_2
+                        .set(server, &pebble::ble::LedColorChunk(colors));
+                }
+                0xFF => {
+                    // Set all LEDs to same color
+                    if cmd.brightness != 0xFF {
+                        current_brightness = cmd.brightness;
+                        leds.set_brightness(current_brightness);
+                    }
+                    let color = led::Color::new(cmd.r, cmd.g, cmd.b);
+                    leds.set_all(color);
+                }
+                idx => {
+                    // Set single LED
+                    if cmd.brightness != 0xFF {
+                        current_brightness = cmd.brightness;
+                        leds.set_brightness(current_brightness);
+                    }
+                    let color = led::Color::new(cmd.r, cmd.g, cmd.b);
+                    leds.set(idx as usize, color);
+                }
+            }
+
+            if let Err(_e) = leds.show() {
+                info!("Failed to update LEDs from BLE command");
+            } else {
+                info!(
+                    "LED updated: brightness={}, idx=0x{:02X}",
+                    current_brightness, cmd.led_index
+                );
+            }
+
+            // Update the control characteristic value for reads
+            let state = [current_brightness, cmd.led_index, cmd.r, cmd.g, cmd.b];
+            let _ = server.sensor_service.led_control.set(server, &state);
+        }
+    };
+
     // Main BLE peripheral loop - accepts connections and handles them concurrently
     let ble_task = async {
         // Advertising data: Flags + Complete Local Name "Pebble"
@@ -242,7 +427,89 @@ async fn main(_spawner: Spawner) -> ! {
                             info!("GATT disconnected: {:?}", reason);
                             break;
                         }
-                        GattConnectionEvent::Gatt { event: _ } => {}
+                        GattConnectionEvent::Gatt { event } => {
+                            if let GattEvent::Write(write_event) = event {
+                                let handle = write_event.handle();
+                                let value = write_event.data();
+
+                                // LED control: [brightness, led_index, r, g, b]
+                                if handle == server.sensor_service.led_control.handle {
+                                    if value.len() >= 5 {
+                                        let cmd = LedCommand {
+                                            brightness: value[0],
+                                            led_index: value[1],
+                                            r: value[2],
+                                            g: value[3],
+                                            b: value[4],
+                                        };
+                                        LED_COMMAND.sender().send(cmd);
+                                        info!("Received LED control command via BLE");
+                                    }
+                                }
+                                // LED brightness: single byte
+                                else if handle == server.sensor_service.led_brightness.handle {
+                                    if !value.is_empty() {
+                                        let cmd = LedCommand {
+                                            brightness: value[0],
+                                            led_index: 0xFE, // Special: brightness only
+                                            r: 0,
+                                            g: 0,
+                                            b: 0,
+                                        };
+                                        LED_COMMAND.sender().send(cmd);
+                                        info!("Received LED brightness command via BLE");
+                                    }
+                                }
+                                // LED colors chunk 0 (LEDs 0-23)
+                                else if handle == server.sensor_service.led_colors_0.handle {
+                                    if value.len() >= 72 {
+                                        let mut colors = [0u8; 72];
+                                        colors.copy_from_slice(&value[..72]);
+                                        LED_COLORS_0.sender().send(colors);
+                                        LED_COMMAND.sender().send(LedCommand {
+                                            brightness: 0xFF,
+                                            led_index: 0xF0,
+                                            r: 0,
+                                            g: 0,
+                                            b: 0,
+                                        });
+                                        info!("Received LED colors chunk 0 via BLE");
+                                    }
+                                }
+                                // LED colors chunk 1 (LEDs 24-47)
+                                else if handle == server.sensor_service.led_colors_1.handle {
+                                    if value.len() >= 72 {
+                                        let mut colors = [0u8; 72];
+                                        colors.copy_from_slice(&value[..72]);
+                                        LED_COLORS_1.sender().send(colors);
+                                        LED_COMMAND.sender().send(LedCommand {
+                                            brightness: 0xFF,
+                                            led_index: 0xF1,
+                                            r: 0,
+                                            g: 0,
+                                            b: 0,
+                                        });
+                                        info!("Received LED colors chunk 1 via BLE");
+                                    }
+                                }
+                                // LED colors chunk 2 (LEDs 48-71)
+                                else if handle == server.sensor_service.led_colors_2.handle {
+                                    if value.len() >= 72 {
+                                        let mut colors = [0u8; 72];
+                                        colors.copy_from_slice(&value[..72]);
+                                        LED_COLORS_2.sender().send(colors);
+                                        LED_COMMAND.sender().send(LedCommand {
+                                            brightness: 0xFF,
+                                            led_index: 0xF2,
+                                            r: 0,
+                                            g: 0,
+                                            b: 0,
+                                        });
+                                        info!("Received LED colors chunk 2 via BLE");
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -301,7 +568,7 @@ async fn main(_spawner: Spawner) -> ! {
     };
 
     // Run all tasks concurrently
-    embassy_futures::join::join3(runner_task, imu_task, ble_task).await;
+    embassy_futures::join::join4(runner_task, imu_task, ble_task, led_task).await;
 
     loop {
         Timer::after(Duration::from_secs(1)).await;
