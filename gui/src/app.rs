@@ -46,10 +46,24 @@ impl ImuViewerApp {
                 let result = this.update(cx, |this, cx| {
                     // Process all pending BLE messages
                     let rx = ble_rx_for_poll.lock();
+                    let mut msg_count = 0;
                     while let Ok(msg) = rx.try_recv() {
                         this.handle_ble_message(msg);
+                        msg_count += 1;
                     }
                     drop(rx);
+
+                    if msg_count > 0 {
+                        // Only log occasionally to avoid spam
+                        static MSG_TOTAL: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let total = MSG_TOTAL
+                            .fetch_add(msg_count, std::sync::atomic::Ordering::Relaxed)
+                            + msg_count;
+                        if total % 500 == 0 {
+                            eprintln!("UI received {} total messages", total);
+                        }
+                    }
 
                     cx.notify();
                 });

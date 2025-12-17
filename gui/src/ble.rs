@@ -120,15 +120,18 @@ async fn run_ble_client(
 
     loop {
         // Start scanning
+        eprintln!("Starting BLE scan...");
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Scanning));
         state.lock().connection_state = ConnectionState::Scanning;
 
+        // Clear any cached peripherals by restarting the scan
+        let _ = central.stop_scan().await;
         central.start_scan(ScanFilter::default()).await?;
 
         // Wait for device discovery
         let device = find_pebble_device(&central).await;
 
-        central.stop_scan().await?;
+        let _ = central.stop_scan().await;
 
         let Some(device) = device else {
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -236,37 +239,56 @@ async fn run_ble_client(
             eprintln!("LED2 characteristic not found!");
         }
 
-        // Read LED colors initially (firmware uses .set() not .notify())
+        // Read LED colors once on connect to get initial state
         read_led_colors(&device, led0_char, led1_char, led2_char, &tx).await;
-
-        // Spawn a task to periodically poll LED colors
-        let device_for_poll = device.clone();
-        let tx_for_poll = tx.clone();
-        let led0_char_clone = led0_char.cloned();
-        let led1_char_clone = led1_char.cloned();
-        let led2_char_clone = led2_char.cloned();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                read_led_colors(
-                    &device_for_poll,
-                    led0_char_clone.as_ref(),
-                    led1_char_clone.as_ref(),
-                    led2_char_clone.as_ref(),
-                    &tx_for_poll,
-                )
-                .await;
-            }
-        });
 
         // Listen for notifications
         eprintln!("Waiting for notifications...");
         let mut notification_stream = device.notifications().await?;
         let mut notification_count = 0u64;
+        let mut last_data_time = std::time::Instant::now();
+        let max_silence = Duration::from_secs(5); // Force reconnect if no data for 5 seconds
 
-        while let Some(notification) = notification_stream.next().await {
+        loop {
+            // Check for timeout - if no notifications for 1 second, check connection
+            let timeout_result =
+                tokio::time::timeout(Duration::from_secs(1), notification_stream.next()).await;
+
+            let notification = match timeout_result {
+                Ok(Some(n)) => {
+                    last_data_time = std::time::Instant::now();
+                    n
+                }
+                Ok(None) => {
+                    eprintln!("Notification stream ended (returned None)");
+                    break;
+                }
+                Err(_) => {
+                    // Timeout fired - check if we've been silent too long
+                    let silence_duration = last_data_time.elapsed();
+                    eprintln!("Timeout fired, silence: {:?}", silence_duration);
+                    if silence_duration > max_silence {
+                        eprintln!("No data for {:?}, assuming disconnected", silence_duration);
+                        break;
+                    }
+                    // Also check is_connected as a secondary check
+                    match device.is_connected().await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            eprintln!("Device disconnected (is_connected returned false)");
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("is_connected error: {:?}, assuming disconnected", e);
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            };
+
             notification_count += 1;
-            if notification_count <= 5 || notification_count.is_multiple_of(100) {
+            if notification_count <= 10 || notification_count.is_multiple_of(500) {
                 eprintln!(
                     "Notification #{}: uuid={}, len={}",
                     notification_count,
@@ -282,7 +304,10 @@ async fn run_ble_client(
                     y: i16::from_le_bytes([data[2], data[3]]) as f64,
                     z: i16::from_le_bytes([data[4], data[5]]) as f64,
                 };
-                let _ = tx.send(BleMessage::AccelData(accel));
+                if tx.send(BleMessage::AccelData(accel)).is_err() {
+                    eprintln!("Channel closed, UI receiver dropped");
+                    break;
+                }
             } else if notification.uuid == GYRO_DATA_UUID && notification.value.len() >= 6 {
                 let data = &notification.value;
                 let gyro = ImuReading {
@@ -319,10 +344,19 @@ async fn run_ble_client(
             notification_count
         );
 
-        // Disconnected
+        // Disconnect cleanly
+        eprintln!("Disconnecting device...");
+        match device.disconnect().await {
+            Ok(_) => eprintln!("Device disconnected successfully"),
+            Err(e) => eprintln!("Device disconnect error (expected): {:?}", e),
+        }
+
+        // Disconnected - will automatically reconnect
+        eprintln!("Connection lost, will reconnect in 1 second...");
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
         state.lock().connection_state = ConnectionState::Disconnected;
         tokio::time::sleep(Duration::from_secs(1)).await;
+        eprintln!("Looping back to scan...");
     }
 }
 

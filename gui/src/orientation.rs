@@ -251,22 +251,19 @@ impl RenderOnce for OrientationView {
                             }
                             .into();
 
-                            // Only draw LEDs that are facing towards us (z < 0 after rotation means facing away)
-                            if rotated.z < distance * 0.5 {
-                                // Draw LED as a small filled circle
-                                let led_x = center_x + px(projected.0 as f32);
-                                let led_y = center_y - px(projected.1 as f32);
-                                let led_size = px(4.0);
+                            // Draw LED as a small filled circle
+                            let led_x = center_x + px(projected.0 as f32);
+                            let led_y = center_y - px(projected.1 as f32);
+                            let led_size = px(4.0);
 
-                                // Use a small quad for the LED
-                                window.paint_quad(gpui::fill(
-                                    gpui::Bounds::new(
-                                        gpui::point(led_x - led_size / 2.0, led_y - led_size / 2.0),
-                                        gpui::size(led_size, led_size),
-                                    ),
-                                    led_color,
-                                ));
-                            }
+                            // Use a small quad for the LED
+                            window.paint_quad(gpui::fill(
+                                gpui::Bounds::new(
+                                    gpui::point(led_x - led_size / 2.0, led_y - led_size / 2.0),
+                                    gpui::size(led_size, led_size),
+                                ),
+                                led_color,
+                            ));
                         }
                     },
                 )
