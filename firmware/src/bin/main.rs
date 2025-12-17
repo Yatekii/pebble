@@ -102,18 +102,18 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    // Set initial LED state: all green at 2% brightness
-    leds.set_brightness(5);
+    // Set initial LED state: all green at 50% brightness
+    leds.set_brightness(128);
     leds.set_all(led::Color::green());
     if let Err(_e) = leds.show() {
         info!("Failed to update LEDs");
     } else {
-        info!("LEDs initialized: all green at 2% brightness");
+        info!("LEDs initialized: all green at 50% brightness");
     }
 
     // Send initial LED command state
     LED_COMMAND.sender().send(LedCommand {
-        brightness: 5,
+        brightness: 128,
         led_index: 0xFF,
         r: 0,
         g: 255,
@@ -230,139 +230,132 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    // Set initial LED characteristic values to match physical state
-    let initial_led_state = [5u8, 0xFF, 0, 255, 0]; // brightness=5, all LEDs, green
-    let _ = server
-        .sensor_service
-        .led_control
-        .set(server, &initial_led_state);
-    let _ = server.sensor_service.led_brightness.set(server, &5u8);
+    // BLE characteristics are synced automatically via LED_STATE when show() is called
 
-    // Initialize LED color chunks to match physical state
-    // All 72 LEDs are green
-    let mut green_chunk = [0u8; 72];
-    for i in 0..24 {
-        green_chunk[i * 3] = 0; // R
-        green_chunk[i * 3 + 1] = 255; // G
-        green_chunk[i * 3 + 2] = 0; // B
-    }
-    let _ = server
-        .sensor_service
-        .led_colors_0
-        .set(server, &pebble::ble::LedColorChunk(green_chunk));
-    let _ = server
-        .sensor_service
-        .led_colors_1
-        .set(server, &pebble::ble::LedColorChunk(green_chunk));
-    let _ = server
-        .sensor_service
-        .led_colors_2
-        .set(server, &pebble::ble::LedColorChunk(green_chunk));
-
-    // Task to handle LED commands from BLE
+    // Task to run LED fade animation: green -> red -> blue -> green
     let led_task = async {
         let mut receiver = LED_COMMAND.receiver().unwrap();
-        let mut current_brightness: u8 = 5;
+
+        // Fade parameters
+        const FADE_STEPS: u16 = 128; // Steps per transition
+        const FADE_DELAY_MS: u64 = 20; // Delay between steps (total ~2.5s per transition)
+
+        // Color keyframes: green -> red -> blue -> green
+        let keyframes: [(u8, u8, u8); 4] = [
+            (0, 255, 0), // Green
+            (255, 0, 0), // Red
+            (0, 0, 255), // Blue
+            (0, 255, 0), // Green (back to start)
+        ];
+
+        let mut keyframe_idx: usize = 0;
+        let mut step: u16 = 0;
+        let mut led_pos: usize = 0; // Current LED position for circle animation
 
         loop {
-            let cmd = receiver.changed().await;
-
-            match cmd.led_index {
-                0xFE => {
-                    // Brightness only update
-                    current_brightness = cmd.brightness;
-                    leds.set_brightness(current_brightness);
-                    let _ = server
-                        .sensor_service
-                        .led_brightness
-                        .set(server, &current_brightness);
-                }
-                0xF0 => {
-                    // Chunk 0: LEDs 0-23
-                    let colors = LED_COLORS_0
-                        .receiver()
-                        .unwrap()
-                        .try_get()
-                        .unwrap_or([0u8; 72]);
-                    for i in 0..24 {
-                        let r = colors[i * 3];
-                        let g = colors[i * 3 + 1];
-                        let b = colors[i * 3 + 2];
-                        leds.set(i, led::Color::new(r, g, b));
+            // Check for BLE command (non-blocking)
+            if let Some(cmd) = receiver.try_changed() {
+                // Handle BLE command - BLE sync is automatic via LED_STATE
+                match cmd.led_index {
+                    0xFE => {
+                        leds.set_brightness(cmd.brightness);
                     }
-                    let _ = server
-                        .sensor_service
-                        .led_colors_0
-                        .set(server, &pebble::ble::LedColorChunk(colors));
-                }
-                0xF1 => {
-                    // Chunk 1: LEDs 24-47
-                    let colors = LED_COLORS_1
-                        .receiver()
-                        .unwrap()
-                        .try_get()
-                        .unwrap_or([0u8; 72]);
-                    for i in 0..24 {
-                        let r = colors[i * 3];
-                        let g = colors[i * 3 + 1];
-                        let b = colors[i * 3 + 2];
-                        leds.set(24 + i, led::Color::new(r, g, b));
+                    0xF0 => {
+                        let colors = LED_COLORS_0
+                            .receiver()
+                            .unwrap()
+                            .try_get()
+                            .unwrap_or([0u8; 72]);
+                        for i in 0..24 {
+                            leds.set(
+                                i,
+                                led::Color::new(
+                                    colors[i * 3],
+                                    colors[i * 3 + 1],
+                                    colors[i * 3 + 2],
+                                ),
+                            );
+                        }
                     }
-                    let _ = server
-                        .sensor_service
-                        .led_colors_1
-                        .set(server, &pebble::ble::LedColorChunk(colors));
-                }
-                0xF2 => {
-                    // Chunk 2: LEDs 48-71
-                    let colors = LED_COLORS_2
-                        .receiver()
-                        .unwrap()
-                        .try_get()
-                        .unwrap_or([0u8; 72]);
-                    for i in 0..24 {
-                        let r = colors[i * 3];
-                        let g = colors[i * 3 + 1];
-                        let b = colors[i * 3 + 2];
-                        leds.set(48 + i, led::Color::new(r, g, b));
+                    0xF1 => {
+                        let colors = LED_COLORS_1
+                            .receiver()
+                            .unwrap()
+                            .try_get()
+                            .unwrap_or([0u8; 72]);
+                        for i in 0..24 {
+                            leds.set(
+                                24 + i,
+                                led::Color::new(
+                                    colors[i * 3],
+                                    colors[i * 3 + 1],
+                                    colors[i * 3 + 2],
+                                ),
+                            );
+                        }
                     }
-                    let _ = server
-                        .sensor_service
-                        .led_colors_2
-                        .set(server, &pebble::ble::LedColorChunk(colors));
-                }
-                0xFF => {
-                    // Set all LEDs to same color
-                    if cmd.brightness != 0xFF {
-                        current_brightness = cmd.brightness;
-                        leds.set_brightness(current_brightness);
+                    0xF2 => {
+                        let colors = LED_COLORS_2
+                            .receiver()
+                            .unwrap()
+                            .try_get()
+                            .unwrap_or([0u8; 72]);
+                        for i in 0..24 {
+                            leds.set(
+                                48 + i,
+                                led::Color::new(
+                                    colors[i * 3],
+                                    colors[i * 3 + 1],
+                                    colors[i * 3 + 2],
+                                ),
+                            );
+                        }
                     }
-                    let color = led::Color::new(cmd.r, cmd.g, cmd.b);
-                    leds.set_all(color);
-                }
-                idx => {
-                    // Set single LED
-                    if cmd.brightness != 0xFF {
-                        current_brightness = cmd.brightness;
-                        leds.set_brightness(current_brightness);
+                    0xFF => {
+                        if cmd.brightness != 0xFF {
+                            leds.set_brightness(cmd.brightness);
+                        }
+                        leds.set_all(led::Color::new(cmd.r, cmd.g, cmd.b));
                     }
-                    let color = led::Color::new(cmd.r, cmd.g, cmd.b);
-                    leds.set(idx as usize, color);
+                    idx => {
+                        if cmd.brightness != 0xFF {
+                            leds.set_brightness(cmd.brightness);
+                        }
+                        leds.set(idx as usize, led::Color::new(cmd.r, cmd.g, cmd.b));
+                    }
                 }
+                let _ = leds.show(); // This broadcasts to LED_STATE automatically
+                continue;
             }
 
-            if let Err(_e) = leds.show() {
-                info!("Failed to update LEDs from BLE command");
-            } else {
-                info!(
-                    "LED updated: brightness={}, idx=0x{:02X}",
-                    current_brightness, cmd.led_index
-                );
+            // Run fade animation with single LED going in a circle
+            let from = keyframes[keyframe_idx];
+            let to = keyframes[(keyframe_idx + 1) % keyframes.len()];
+
+            // Linear interpolation for color
+            let t = step as u32;
+            let r = ((from.0 as u32 * (FADE_STEPS as u32 - t) + to.0 as u32 * t)
+                / FADE_STEPS as u32) as u8;
+            let g = ((from.1 as u32 * (FADE_STEPS as u32 - t) + to.1 as u32 * t)
+                / FADE_STEPS as u32) as u8;
+            let b = ((from.2 as u32 * (FADE_STEPS as u32 - t) + to.2 as u32 * t)
+                / FADE_STEPS as u32) as u8;
+
+            // Clear all LEDs and set only the current position
+            leds.clear();
+            leds.set(led_pos, led::Color::new(r, g, b));
+            let _ = leds.show();
+
+            // Advance position around the circle
+            led_pos = (led_pos + 1) % led::NUM_LEDS;
+
+            step += 1;
+            if step >= FADE_STEPS {
+                step = 0;
+                keyframe_idx = (keyframe_idx + 1) % (keyframes.len() - 1);
             }
 
-            // Update the control characteristic value for reads
-            let state = [current_brightness, cmd.led_index, cmd.r, cmd.g, cmd.b];
-            let _ = server.sensor_service.led_control.set(server, &state);
+            Timer::after(Duration::from_millis(FADE_DELAY_MS)).await;
         }
     };
 
@@ -560,15 +553,126 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             };
 
-            embassy_futures::select::select(gatt_events, sensor_notify).await;
+            // Task to send LED notifications to this connection (throttled to 10Hz)
+            let led_notify = async {
+                let mut receiver = led::LED_STATE.receiver().unwrap();
+                loop {
+                    let state = receiver.changed().await;
+
+                    // Throttle notifications to avoid overwhelming BLE
+                    Timer::after(Duration::from_millis(100)).await;
+
+                    // Get latest state (skip intermediate updates)
+                    let state = receiver.try_get().unwrap_or(state);
+
+                    // Notify LED brightness
+                    if server
+                        .sensor_service
+                        .led_brightness
+                        .notify(&conn, &state.brightness)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+
+                    // Notify LED color chunks
+                    if server
+                        .sensor_service
+                        .led_colors_0
+                        .notify(&conn, &pebble::ble::LedColorChunk(state.chunk0))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+
+                    if server
+                        .sensor_service
+                        .led_colors_1
+                        .notify(&conn, &pebble::ble::LedColorChunk(state.chunk1))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+
+                    if server
+                        .sensor_service
+                        .led_colors_2
+                        .notify(&conn, &pebble::ble::LedColorChunk(state.chunk2))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+
+                    // Notify led_control with current color
+                    let ctrl = [
+                        state.brightness,
+                        0xFF,
+                        state.chunk0[0],
+                        state.chunk0[1],
+                        state.chunk0[2],
+                    ];
+                    if server
+                        .sensor_service
+                        .led_control
+                        .notify(&conn, &ctrl)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+
+            embassy_futures::select::select3(gatt_events, sensor_notify, led_notify).await;
 
             let remaining = ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed) - 1;
             info!("Client disconnected ({} remaining)", remaining);
         }
     };
 
+    // Task to sync LED state to BLE characteristics
+    let led_ble_sync_task = async {
+        let mut receiver = led::LED_STATE.receiver().unwrap();
+        loop {
+            let state = receiver.changed().await;
+
+            // Update BLE characteristics
+            let _ = server
+                .sensor_service
+                .led_brightness
+                .set(server, &state.brightness);
+            let _ = server
+                .sensor_service
+                .led_colors_0
+                .set(server, &pebble::ble::LedColorChunk(state.chunk0));
+            let _ = server
+                .sensor_service
+                .led_colors_1
+                .set(server, &pebble::ble::LedColorChunk(state.chunk1));
+            let _ = server
+                .sensor_service
+                .led_colors_2
+                .set(server, &pebble::ble::LedColorChunk(state.chunk2));
+
+            // Update led_control with current color (use first LED's color)
+            let ctrl = [
+                state.brightness,
+                0xFF,
+                state.chunk0[0],
+                state.chunk0[1],
+                state.chunk0[2],
+            ];
+            let _ = server.sensor_service.led_control.set(server, &ctrl);
+        }
+    };
+
     // Run all tasks concurrently
-    embassy_futures::join::join4(runner_task, imu_task, ble_task, led_task).await;
+    embassy_futures::join::join5(runner_task, imu_task, ble_task, led_task, led_ble_sync_task)
+        .await;
 
     loop {
         Timer::after(Duration::from_secs(1)).await;

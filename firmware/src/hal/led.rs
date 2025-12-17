@@ -1,12 +1,39 @@
 //! WS2812B LED driver using esp-hal-smartled
 //!
 //! Drives 72 NeoPixel LEDs arranged in a circle via GPIO15.
+//! Automatically broadcasts state changes via LED_STATE for BLE sync.
 
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::watch::Watch;
 use esp_hal::Blocking;
 use esp_hal::rmt::Rmt;
 use esp_hal::time::Rate;
 use esp_hal_smartled::SmartLedsAdapter;
 use smart_leds::{RGB8, SmartLedsWrite, brightness, gamma};
+
+/// Current LED state broadcast for BLE synchronization
+/// Contains: (brightness, colors as 3 chunks of 72 bytes each)
+#[derive(Clone, Copy)]
+pub struct LedState {
+    pub brightness: u8,
+    pub chunk0: [u8; 72],
+    pub chunk1: [u8; 72],
+    pub chunk2: [u8; 72],
+}
+
+impl Default for LedState {
+    fn default() -> Self {
+        Self {
+            brightness: 255,
+            chunk0: [0u8; 72],
+            chunk1: [0u8; 72],
+            chunk2: [0u8; 72],
+        }
+    }
+}
+
+/// Global LED state watch - subscribe to receive updates when LEDs change
+pub static LED_STATE: Watch<CriticalSectionRawMutex, LedState, 2> = Watch::new();
 
 /// Number of LEDs in the ring
 pub const NUM_LEDS: usize = 72;
@@ -84,11 +111,47 @@ impl<'a> LedStrip<'a> {
         self.brightness_level = level;
     }
 
-    /// Write the current colors to the LED strip
+    /// Write the current colors to the LED strip and broadcast state for BLE sync
     pub fn show(&mut self) -> Result<(), esp_hal_smartled::LedAdapterError> {
         let iter = self.colors.iter().map(|c| RGB8::from(*c));
-        self.adapter
-            .write(brightness(gamma(iter), self.brightness_level))
+
+        // Disable interrupts during transmission to prevent timing glitches
+        let result = critical_section::with(|_| {
+            self.adapter
+                .write(brightness(gamma(iter), self.brightness_level))
+        });
+
+        // Broadcast state for BLE synchronization
+        let mut state = LedState {
+            brightness: self.brightness_level,
+            chunk0: [0u8; 72],
+            chunk1: [0u8; 72],
+            chunk2: [0u8; 72],
+        };
+
+        // Pack colors into chunks (24 LEDs × 3 bytes each = 72 bytes per chunk)
+        for i in 0..24 {
+            let c = self.colors[i];
+            state.chunk0[i * 3] = c.r;
+            state.chunk0[i * 3 + 1] = c.g;
+            state.chunk0[i * 3 + 2] = c.b;
+        }
+        for i in 0..24 {
+            let c = self.colors[24 + i];
+            state.chunk1[i * 3] = c.r;
+            state.chunk1[i * 3 + 1] = c.g;
+            state.chunk1[i * 3 + 2] = c.b;
+        }
+        for i in 0..24 {
+            let c = self.colors[48 + i];
+            state.chunk2[i * 3] = c.r;
+            state.chunk2[i * 3 + 1] = c.g;
+            state.chunk2[i * 3 + 2] = c.b;
+        }
+
+        LED_STATE.sender().send(state);
+
+        result
     }
 }
 
