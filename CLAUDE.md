@@ -8,7 +8,7 @@ I am building a reverse geocache. A reverse geocache (in further writing I will 
 Since that alone would be boring, the box has a couple of puzzles built in.
 The electronic design contain an IMU (acc, gyro, compass) (9 axes) , a GPS, 72 Neopixel LEDs arranged in a circle, an ESP C6 with WIfi and Bluetooth and a USB charger. Additionally there is a reed switch which just connects the battery as a nice hidden on/off switch. There is also a Servo which has 180 degree range of motion and is controlled via a PWM signal.
 
-The GPS is controlled via UART, the IMU (acc & gyro directly via I2C) and the Compass is attached to the IMU via I2c and uses the relay functionality.
+The GPS is controlled via UART, the BMI270 (acc & gyro ) is controlled via I2C and the BMM350 (compass) is controlled via the aux i2c interface on the BMI270.
 
 This is the firmware component of theproject. The project consists of:
 
