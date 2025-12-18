@@ -21,7 +21,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
 use pebble::ble::{AccBleData, AhrsBleData, GpsBleData, GyroBleData, MagBleData, SensorServer};
-use pebble::hal::{ahrs::AhrsFilter, gps, imu, led};
+use pebble::hal::{ahrs::AhrsFilter, gps, imu, led, servo};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
@@ -66,6 +66,9 @@ static LED_COLORS_2: Watch<CriticalSectionRawMutex, [u8; 72], 2> = Watch::new();
 
 /// Track number of active connections
 static ACTIVE_CONNECTIONS: AtomicU8 = AtomicU8::new(0);
+
+/// Compass heading in degrees (0-359), broadcast from IMU task to LED task
+static COMPASS_HEADING: Watch<CriticalSectionRawMutex, u16, 2> = Watch::new();
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -145,7 +148,7 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    // Initialize magnetometer on shared bus (direct I2C access)
+    // Initialize magnetometer directly on shared I2C bus
     let mag = match imu::SharedBmm350::new(shared_i2c, &mut delay) {
         Ok(mag) => {
             info!("Magnetometer initialized successfully");
@@ -160,6 +163,27 @@ async fn main(_spawner: Spawner) -> ! {
     // Initialize GPS on UART1 (GPIO8=RX, GPIO18=TX)
     let mut gps = gps::init(peripherals.UART1, peripherals.GPIO8, peripherals.GPIO18);
     info!("GPS initialized on UART1");
+
+    // Initialize servo on GPIO1
+    // Timer and Ledc must be stored in static cells to satisfy lifetime requirements
+    static LEDC: StaticCell<esp_hal::ledc::Ledc<'static>> = StaticCell::new();
+    static SERVO_TIMER: StaticCell<esp_hal::ledc::timer::Timer<'static, esp_hal::ledc::LowSpeed>> =
+        StaticCell::new();
+
+    let mut ledc = esp_hal::ledc::Ledc::new(peripherals.LEDC);
+    ledc.set_global_slow_clock(esp_hal::ledc::LSGlobalClkSource::APBClk);
+    let ledc = LEDC.init(ledc);
+    let servo_timer = SERVO_TIMER.init(servo::init_timer(ledc));
+    let mut servo = match servo::init_channel(ledc, peripherals.GPIO1, servo_timer) {
+        Ok(s) => {
+            info!("Servo initialized successfully");
+            Some(s)
+        }
+        Err(e) => {
+            info!("Failed to initialize servo: {:?}", e);
+            None
+        }
+    };
 
     // Initialize BLE
     let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
@@ -205,6 +229,12 @@ async fn main(_spawner: Spawner) -> ! {
         let mut ahrs = AhrsFilter::new();
         let mut sample_count: u32 = 0;
 
+        // Hard iron calibration - track min/max to find center
+        let mut mag_x_min: i32 = i32::MAX;
+        let mut mag_x_max: i32 = i32::MIN;
+        let mut mag_y_min: i32 = i32::MAX;
+        let mut mag_y_max: i32 = i32::MIN;
+
         loop {
             // Read IMU data
             let imu_result = imu.read();
@@ -213,11 +243,32 @@ async fn main(_spawner: Spawner) -> ! {
             let mut data = SensorData::default();
 
             if let Ok(imu_data) = &imu_result {
-                // Convert to physical units and update AHRS filter
-                let accel = imu_data.accel_g();
+                // Convert to physical units
+                let accel_raw = imu_data.accel_g();
                 let gyro = imu_data.gyro_rads();
 
-                // Update AHRS filter with IMU data
+                // Correct accelerometer for sensor offset from center of rotation
+                // The IMU is 45mm (0.045m) to the right (+X) of the PCB center
+                // Formula: a_corrected = a_measured - ω × (ω × r)
+                // For r = (rx, 0, 0), the centripetal acceleration is:
+                //   a_cent_x = -rx * (ωy² + ωz²)
+                //   a_cent_y = rx * ωx * ωy
+                //   a_cent_z = rx * ωx * ωz
+                const IMU_OFFSET_X: f32 = 0.045; // 45mm in meters
+                const G: f32 = 9.81; // m/s² per g
+
+                let (wx, wy, wz) = gyro; // rad/s
+                let a_cent_x = -IMU_OFFSET_X * (wy * wy + wz * wz) / G; // Convert to g
+                let a_cent_y = IMU_OFFSET_X * wx * wy / G;
+                let a_cent_z = IMU_OFFSET_X * wx * wz / G;
+
+                let accel = (
+                    accel_raw.0 - a_cent_x,
+                    accel_raw.1 - a_cent_y,
+                    accel_raw.2 - a_cent_z,
+                );
+
+                // Update AHRS filter with corrected IMU data
                 let orientation = ahrs.update_imu(accel, gyro);
 
                 // Log orientation periodically (every 50 samples = 5 seconds)
@@ -253,6 +304,40 @@ async fn main(_spawner: Spawner) -> ! {
                     y: mag_data.y,
                     z: mag_data.z,
                 };
+
+                // Update calibration min/max
+                if mag_data.x < mag_x_min {
+                    mag_x_min = mag_data.x;
+                }
+                if mag_data.x > mag_x_max {
+                    mag_x_max = mag_data.x;
+                }
+                if mag_data.y < mag_y_min {
+                    mag_y_min = mag_data.y;
+                }
+                if mag_data.y > mag_y_max {
+                    mag_y_max = mag_data.y;
+                }
+
+                // Calculate hard iron offset (center of min/max)
+                let x_offset = (mag_x_min + mag_x_max) / 2;
+                let y_offset = (mag_y_min + mag_y_max) / 2;
+
+                // Apply hard iron correction
+                let x = (mag_data.x - x_offset) as f32;
+                let y = (mag_data.y - y_offset) as f32;
+
+                // Calculate compass heading from magnetometer X and Y
+                let heading_rad = libm::atan2f(y, x);
+                let mut heading_deg = heading_rad * 180.0 / core::f32::consts::PI;
+                if heading_deg < 0.0 {
+                    heading_deg += 360.0;
+                }
+                info!(
+                    "MAG: x={} y={} heading={} (cal: x_off={} y_off={})",
+                    mag_data.x, mag_data.y, heading_deg as i32, x_offset, y_offset
+                );
+                COMPASS_HEADING.sender().send(heading_deg as u16);
             }
 
             // Broadcast to all waiting connections
@@ -301,130 +386,29 @@ async fn main(_spawner: Spawner) -> ! {
 
     // BLE characteristics are synced automatically via LED_STATE when show() is called
 
-    // Task to run LED fade animation: green -> red -> blue -> green
+    // Task to display compass heading - one LED pointing north
     let led_task = async {
-        let mut receiver = LED_COMMAND.receiver().unwrap();
+        let mut heading_receiver = COMPASS_HEADING.receiver().unwrap();
 
-        // Fade parameters
-        const FADE_STEPS: u16 = 128; // Steps per transition
-        const FADE_DELAY_MS: u64 = 20; // Delay between steps (total ~2.5s per transition)
-
-        // Color keyframes: green -> red -> blue -> green
-        let keyframes: [(u8, u8, u8); 4] = [
-            (0, 255, 0), // Green
-            (255, 0, 0), // Red
-            (0, 0, 255), // Blue
-            (0, 255, 0), // Green (back to start)
-        ];
-
-        let mut keyframe_idx: usize = 0;
-        let mut step: u16 = 0;
-        let mut led_pos: usize = 0; // Current LED position for circle animation
+        // Set brightness
+        leds.set_brightness(64);
 
         loop {
-            // Check for BLE command (non-blocking)
-            if let Some(cmd) = receiver.try_changed() {
-                // Handle BLE command - BLE sync is automatic via LED_STATE
-                match cmd.led_index {
-                    0xFE => {
-                        leds.set_brightness(cmd.brightness);
-                    }
-                    0xF0 => {
-                        let colors = LED_COLORS_0
-                            .receiver()
-                            .unwrap()
-                            .try_get()
-                            .unwrap_or([0u8; 72]);
-                        for i in 0..24 {
-                            leds.set(
-                                i,
-                                led::Color::new(
-                                    colors[i * 3],
-                                    colors[i * 3 + 1],
-                                    colors[i * 3 + 2],
-                                ),
-                            );
-                        }
-                    }
-                    0xF1 => {
-                        let colors = LED_COLORS_1
-                            .receiver()
-                            .unwrap()
-                            .try_get()
-                            .unwrap_or([0u8; 72]);
-                        for i in 0..24 {
-                            leds.set(
-                                24 + i,
-                                led::Color::new(
-                                    colors[i * 3],
-                                    colors[i * 3 + 1],
-                                    colors[i * 3 + 2],
-                                ),
-                            );
-                        }
-                    }
-                    0xF2 => {
-                        let colors = LED_COLORS_2
-                            .receiver()
-                            .unwrap()
-                            .try_get()
-                            .unwrap_or([0u8; 72]);
-                        for i in 0..24 {
-                            leds.set(
-                                48 + i,
-                                led::Color::new(
-                                    colors[i * 3],
-                                    colors[i * 3 + 1],
-                                    colors[i * 3 + 2],
-                                ),
-                            );
-                        }
-                    }
-                    0xFF => {
-                        if cmd.brightness != 0xFF {
-                            leds.set_brightness(cmd.brightness);
-                        }
-                        leds.set_all(led::Color::new(cmd.r, cmd.g, cmd.b));
-                    }
-                    idx => {
-                        if cmd.brightness != 0xFF {
-                            leds.set_brightness(cmd.brightness);
-                        }
-                        leds.set(idx as usize, led::Color::new(cmd.r, cmd.g, cmd.b));
-                    }
-                }
-                let _ = leds.show(); // This broadcasts to LED_STATE automatically
-                continue;
-            }
+            // Wait for new heading
+            let heading = heading_receiver.changed().await;
 
-            // Run fade animation with single LED going in a circle
-            let from = keyframes[keyframe_idx];
-            let to = keyframes[(keyframe_idx + 1) % keyframes.len()];
+            // Convert heading (0-359 degrees) to LED index (0-71)
+            // LED 0 is at some physical position, heading 0 = magnetic north
+            // 72 LEDs in a circle = 5 degrees per LED
+            // Invert direction so LED points north (not rotates with heading)
+            // Subtract 90 degree offset to correct for physical LED position
+            let inverted_heading = (360 - heading + 270) % 360;
+            let led_index = ((inverted_heading as u32 * led::NUM_LEDS as u32) / 360) as usize;
 
-            // Linear interpolation for color
-            let t = step as u32;
-            let r = ((from.0 as u32 * (FADE_STEPS as u32 - t) + to.0 as u32 * t)
-                / FADE_STEPS as u32) as u8;
-            let g = ((from.1 as u32 * (FADE_STEPS as u32 - t) + to.1 as u32 * t)
-                / FADE_STEPS as u32) as u8;
-            let b = ((from.2 as u32 * (FADE_STEPS as u32 - t) + to.2 as u32 * t)
-                / FADE_STEPS as u32) as u8;
-
-            // Clear all LEDs and set only the current position
+            // Clear all LEDs and light only the north-pointing one
             leds.clear();
-            leds.set(led_pos, led::Color::new(r, g, b));
+            leds.set(led_index, led::Color::red());
             let _ = leds.show();
-
-            // Advance position around the circle
-            led_pos = (led_pos + 1) % led::NUM_LEDS;
-
-            step += 1;
-            if step >= FADE_STEPS {
-                step = 0;
-                keyframe_idx = (keyframe_idx + 1) % (keyframes.len() - 1);
-            }
-
-            Timer::after(Duration::from_millis(FADE_DELAY_MS)).await;
         }
     };
 
@@ -733,6 +717,30 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
+    // Task to move servo in 90-degree steps: 0 -> 90 -> 180 -> 90 -> 0 -> ...
+    let servo_task = async {
+        if let Some(ref mut servo) = servo {
+            let positions: [u8; 4] = [0, 90, 180, 90];
+            let mut idx = 0;
+
+            loop {
+                let angle = positions[idx];
+                if let Err(e) = servo.set_angle(angle) {
+                    info!("Servo error: {:?}", e);
+                }
+                info!("Servo moved to {} degrees", angle);
+
+                idx = (idx + 1) % positions.len();
+                Timer::after(Duration::from_secs(2)).await;
+            }
+        } else {
+            // No servo, just wait forever
+            loop {
+                Timer::after(Duration::from_secs(60)).await;
+            }
+        }
+    };
+
     // Task to sync LED state to BLE characteristics
     let led_ble_sync_task = async {
         let mut receiver = led::LED_STATE.receiver().unwrap();
@@ -772,7 +780,7 @@ async fn main(_spawner: Spawner) -> ! {
     // Run all tasks concurrently
     embassy_futures::join::join5(
         runner_task,
-        embassy_futures::join::join(imu_task, gps_task),
+        embassy_futures::join::join3(imu_task, gps_task, servo_task),
         ble_task,
         led_task,
         led_ble_sync_task,
