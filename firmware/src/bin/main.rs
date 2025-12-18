@@ -124,23 +124,36 @@ async fn main(_spawner: Spawner) -> ! {
         b: 0,
     });
 
-    // Initialize IMU
+    // Initialize shared I2C bus for IMU and magnetometer (bodged to same bus)
     let mut delay = Delay::new();
-    let mut imu = match imu::init(
-        peripherals.I2C0,
-        peripherals.GPIO2,
-        peripherals.GPIO3,
-        &mut delay,
-    ) {
-        Ok(mut imu) => {
+    static SHARED_I2C: static_cell::StaticCell<
+        imu::SharedI2c<esp_hal::i2c::master::I2c<'static, esp_hal::Blocking>>,
+    > = static_cell::StaticCell::new();
+    let shared_i2c = SHARED_I2C.init(
+        imu::init_shared(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO3)
+            .expect("Failed to initialize I2C"),
+    );
+
+    // Initialize IMU on shared bus
+    let imu = match imu::SharedImu::new(shared_i2c, &mut delay) {
+        Ok(imu) => {
             info!("IMU initialized successfully");
-            if let Err(e) = imu.init_magnetometer(&mut delay) {
-                info!("Failed to initialize magnetometer: {:?}", e);
-            }
             imu
         }
         Err(e) => {
             defmt::panic!("Failed to initialize IMU: {:?}", e);
+        }
+    };
+
+    // Initialize magnetometer on shared bus (direct I2C access)
+    let mag = match imu::SharedBmm350::new(shared_i2c, &mut delay) {
+        Ok(mag) => {
+            info!("Magnetometer initialized successfully");
+            Some(mag)
+        }
+        Err(e) => {
+            info!("Failed to initialize magnetometer: {:?}", e);
+            None
         }
     };
 
@@ -195,7 +208,7 @@ async fn main(_spawner: Spawner) -> ! {
         loop {
             // Read IMU data
             let imu_result = imu.read();
-            let mag_result = imu.read_mag();
+            let mag_result = mag.as_ref().map(|m| m.read());
 
             let mut data = SensorData::default();
 
@@ -234,7 +247,7 @@ async fn main(_spawner: Spawner) -> ! {
                 data.valid = true;
             }
 
-            if let Ok(mag_data) = &mag_result {
+            if let Some(Ok(mag_data)) = &mag_result {
                 data.mag = MagBleData {
                     x: mag_data.x,
                     y: mag_data.y,
