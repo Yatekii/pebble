@@ -4,14 +4,16 @@
 //! BMM350 Datasheet: https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmm350-ds001.pdf
 
 use bmi2::config::BMI270_CONFIG_FILE;
-use defmt::Format;
 use embedded_hal::i2c::I2c as I2cTrait;
 use esp_hal::Blocking;
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::time::Rate;
 
+use crate::hal::peripherals::i2c::{Error, SharedI2c, SharedI2cDevice};
+
 // BMI270 Register addresses
-mod reg {
+#[allow(dead_code)]
+mod bmi270_reg {
     pub const CHIP_ID: u8 = 0x00;
     pub const ERR_REG: u8 = 0x02;
     pub const STATUS: u8 = 0x03;
@@ -76,19 +78,6 @@ const BMM350_SOFT_RESET: u8 = 0xB6;
 
 const BMI270_CHIP_ID: u8 = 0x24;
 const BMI270_I2C_ADDR: u8 = 0x68;
-
-/// IMU initialization error
-#[derive(Debug, Format)]
-pub enum Error<E> {
-    /// I2C creation error
-    I2cCreate,
-    /// I2C communication error
-    Bus(E),
-    /// Chip ID mismatch
-    InvalidChipId(u8),
-    /// Initialization timeout
-    InitTimeout,
-}
 
 /// Accelerometer and gyroscope data
 #[derive(Debug, Clone, Copy, Default)]
@@ -175,29 +164,29 @@ where
         };
 
         // Dummy read to wake up the device (required for I2C after power-on)
-        let _ = imu.read_reg(reg::CHIP_ID);
+        let _ = imu.read_reg(bmi270_reg::CHIP_ID);
         delay.delay_us(450);
 
         // Soft reset the device
-        imu.write_reg(reg::CMD, 0xB6)?; // SOFT_RESET command
+        imu.write_reg(bmi270_reg::CMD, 0xB6)?; // SOFT_RESET command
         delay.delay_ms(2);
 
         // Another dummy read after reset
-        let _ = imu.read_reg(reg::CHIP_ID);
+        let _ = imu.read_reg(bmi270_reg::CHIP_ID);
         delay.delay_us(450);
 
         // Verify chip ID
-        let chip_id = imu.read_reg(reg::CHIP_ID)?;
+        let chip_id = imu.read_reg(bmi270_reg::CHIP_ID)?;
         if chip_id != BMI270_CHIP_ID {
             return Err(Error::InvalidChipId(chip_id));
         }
 
         // Disable advanced power save before config upload
-        imu.write_reg(reg::PWR_CONF, 0x00)?;
+        imu.write_reg(bmi270_reg::PWR_CONF, 0x00)?;
         delay.delay_us(450);
 
         // Prepare for config load - set init_ctrl to 0
-        imu.write_reg(reg::INIT_CTRL, 0x00)?;
+        imu.write_reg(bmi270_reg::INIT_CTRL, 0x00)?;
 
         // Upload configuration file in small chunks
         let mut offset = 0usize;
@@ -206,8 +195,8 @@ where
         while offset < BMI270_CONFIG_FILE.len() {
             // Set the address (divided by 2 as per datasheet)
             let addr_val = (offset / 2) as u16;
-            imu.write_reg(reg::INIT_ADDR_0, (addr_val & 0x0F) as u8)?;
-            imu.write_reg(reg::INIT_ADDR_1, (addr_val >> 4) as u8)?;
+            imu.write_reg(bmi270_reg::INIT_ADDR_0, (addr_val & 0x0F) as u8)?;
+            imu.write_reg(bmi270_reg::INIT_ADDR_1, (addr_val >> 4) as u8)?;
 
             // Calculate chunk end
             let end = (offset + chunk_size).min(BMI270_CONFIG_FILE.len());
@@ -215,7 +204,7 @@ where
 
             // Write chunk: first byte is register address, then data
             let mut buf = [0u8; 33]; // 1 register + 32 data bytes max
-            buf[0] = reg::INIT_DATA;
+            buf[0] = bmi270_reg::INIT_DATA;
             buf[1..1 + chunk.len()].copy_from_slice(chunk);
 
             imu.i2c
@@ -226,13 +215,13 @@ where
         }
 
         // Start initialization
-        imu.write_reg(reg::INIT_CTRL, 0x01)?;
+        imu.write_reg(bmi270_reg::INIT_CTRL, 0x01)?;
 
         // Wait for initialization to complete
         let mut init_ok = false;
         for _ in 0..50 {
             delay.delay_ms(10);
-            let status = imu.read_reg(reg::INTERNAL_STATUS)?;
+            let status = imu.read_reg(bmi270_reg::INTERNAL_STATUS)?;
             let msg = status & 0x0F;
             if msg == 0x01 {
                 init_ok = true;
@@ -248,25 +237,25 @@ where
         }
 
         // Disable advanced power save mode
-        imu.write_reg(reg::PWR_CONF, 0x00)?;
+        imu.write_reg(bmi270_reg::PWR_CONF, 0x00)?;
         delay.delay_ms(1);
 
         // Enable accelerometer and gyroscope (no aux)
         // PWR_CTRL: bit 2 = acc_en, bit 1 = gyr_en
-        imu.write_reg(reg::PWR_CTRL, 0x0E)?; // acc_en + gyr_en + temp_en
+        imu.write_reg(bmi270_reg::PWR_CTRL, 0x0E)?; // acc_en + gyr_en + temp_en
         delay.delay_ms(50);
 
         // Configure accelerometer: 100Hz ODR, normal mode, +/-8g
         // ACC_CONF: odr=0x08 (100Hz), bwp=0x02 (normal), filter_perf=1
-        imu.write_reg(reg::ACC_CONF, 0xA8)?;
+        imu.write_reg(bmi270_reg::ACC_CONF, 0xA8)?;
         // ACC_RANGE: 0x02 = +/-8g
-        imu.write_reg(reg::ACC_RANGE, 0x02)?;
+        imu.write_reg(bmi270_reg::ACC_RANGE, 0x02)?;
 
         // Configure gyroscope: 200Hz ODR, normal mode, +/-2000dps
         // GYR_CONF: odr=0x09 (200Hz), bwp=0x02 (normal), noise_perf=1, filter_perf=1
-        imu.write_reg(reg::GYR_CONF, 0xA9)?;
+        imu.write_reg(bmi270_reg::GYR_CONF, 0xA9)?;
         // GYR_RANGE: 0x00 = +/-2000dps
-        imu.write_reg(reg::GYR_RANGE, 0x00)?;
+        imu.write_reg(bmi270_reg::GYR_RANGE, 0x00)?;
 
         Ok(imu)
     }
@@ -274,7 +263,7 @@ where
     /// Read accelerometer and gyroscope data
     pub fn read(&mut self) -> Result<ImuData, Error<E>> {
         let mut buf = [0u8; 12];
-        self.read_regs(reg::ACC_DATA_0, &mut buf)?;
+        self.read_regs(bmi270_reg::ACC_DATA_0, &mut buf)?;
 
         Ok(ImuData {
             acc_x: i16::from_le_bytes([buf[0], buf[1]]),
@@ -288,14 +277,14 @@ where
 
     /// Read and log diagnostic information
     pub fn debug_status(&mut self) -> Result<(), Error<E>> {
-        let status = self.read_reg(reg::STATUS)?;
+        let status = self.read_reg(bmi270_reg::STATUS)?;
         defmt::info!(
             "Status: acc_data_ready={} gyr_data_ready={}",
             (status & 0x80) != 0,
             (status & 0x40) != 0
         );
 
-        let pwr_ctrl = self.read_reg(reg::PWR_CTRL)?;
+        let pwr_ctrl = self.read_reg(bmi270_reg::PWR_CTRL)?;
         defmt::info!(
             "PwrCtrl: acc_en={} gyr_en={} temp_en={}",
             (pwr_ctrl & 0x04) != 0,
@@ -303,13 +292,13 @@ where
             (pwr_ctrl & 0x08) != 0
         );
 
-        let pwr_conf = self.read_reg(reg::PWR_CONF)?;
+        let pwr_conf = self.read_reg(bmi270_reg::PWR_CONF)?;
         defmt::info!("PwrConf: power_save={}", (pwr_conf & 0x01) != 0);
 
-        let internal_status = self.read_reg(reg::INTERNAL_STATUS)?;
+        let internal_status = self.read_reg(bmi270_reg::INTERNAL_STATUS)?;
         defmt::info!("InternalStatus: {:#x}", internal_status);
 
-        let errors = self.read_reg(reg::ERR_REG)?;
+        let errors = self.read_reg(bmi270_reg::ERR_REG)?;
         defmt::info!("Errors: {:#x}", errors);
 
         Ok(())
@@ -534,86 +523,48 @@ pub fn init(
     Imu::new(i2c, delay)
 }
 
-/// Wrapper to share I2C bus between IMU and magnetometer using RefCell
-pub struct SharedI2c<I2C> {
-    i2c: core::cell::RefCell<I2C>,
-}
-
-impl<I2C> SharedI2c<I2C> {
-    pub fn new(i2c: I2C) -> Self {
-        Self {
-            i2c: core::cell::RefCell::new(i2c),
-        }
-    }
-}
-
 /// IMU that uses shared I2C bus (for when BMM350 is on the same bus)
-pub struct SharedImu<'a, I2C> {
-    i2c: &'a SharedI2c<I2C>,
+pub struct SharedBmi270<'a, I2C> {
+    i2c: SharedI2cDevice<'a, BMI270_I2C_ADDR, I2C>,
 }
 
-impl<'a, I2C, E> SharedImu<'a, I2C>
+impl<'a, I2C, E> SharedBmi270<'a, I2C>
 where
     I2C: I2cTrait<Error = E>,
     E: defmt::Format,
 {
-    fn write_reg(&self, register: u8, value: u8) -> Result<(), Error<E>> {
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write(BMI270_I2C_ADDR, &[register, value])
-            .map_err(Error::Bus)
-    }
-
-    fn read_reg(&self, register: u8) -> Result<u8, Error<E>> {
-        let mut buf = [0u8];
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write_read(BMI270_I2C_ADDR, &[register], &mut buf)
-            .map_err(Error::Bus)?;
-        Ok(buf[0])
-    }
-
-    fn read_regs(&self, register: u8, buf: &mut [u8]) -> Result<(), Error<E>> {
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write_read(BMI270_I2C_ADDR, &[register], buf)
-            .map_err(Error::Bus)
-    }
-
     /// Create and initialize a new shared IMU driver
     pub fn new<D: embedded_hal::delay::DelayNs>(
         i2c: &'a SharedI2c<I2C>,
         delay: &mut D,
     ) -> Result<Self, Error<E>> {
+        let i2c = i2c.device_with_address::<BMI270_I2C_ADDR>();
         let imu = Self { i2c };
 
         // Dummy read to wake up the device (required for I2C after power-on)
-        let _ = imu.read_reg(reg::CHIP_ID);
+        let _ = imu.i2c.read_reg(bmi270_reg::CHIP_ID);
         delay.delay_us(450);
 
         // Soft reset the device
-        imu.write_reg(reg::CMD, 0xB6)?; // SOFT_RESET command
+        imu.i2c.write_reg(bmi270_reg::CMD, 0xB6)?; // SOFT_RESET command
         delay.delay_ms(2);
 
         // Another dummy read after reset
-        let _ = imu.read_reg(reg::CHIP_ID);
+        let _ = imu.i2c.read_reg(bmi270_reg::CHIP_ID);
         delay.delay_us(450);
 
         // Verify chip ID
-        let chip_id = imu.read_reg(reg::CHIP_ID)?;
+        let chip_id = imu.i2c.read_reg(bmi270_reg::CHIP_ID)?;
         if chip_id != BMI270_CHIP_ID {
             return Err(Error::InvalidChipId(chip_id));
         }
 
         // Disable advanced power save before config upload
-        imu.write_reg(reg::PWR_CONF, 0x00)?;
+        imu.i2c.write_reg(bmi270_reg::PWR_CONF, 0x00)?;
         delay.delay_us(450);
 
         // Prepare for config load - set init_ctrl to 0
-        imu.write_reg(reg::INIT_CTRL, 0x00)?;
+        imu.i2c.write_reg(bmi270_reg::INIT_CTRL, 0x00)?;
 
         // Upload configuration file in small chunks
         let mut offset = 0usize;
@@ -622,8 +573,10 @@ where
         while offset < BMI270_CONFIG_FILE.len() {
             // Set the address (divided by 2 as per datasheet)
             let addr_val = (offset / 2) as u16;
-            imu.write_reg(reg::INIT_ADDR_0, (addr_val & 0x0F) as u8)?;
-            imu.write_reg(reg::INIT_ADDR_1, (addr_val >> 4) as u8)?;
+            imu.i2c
+                .write_reg(bmi270_reg::INIT_ADDR_0, (addr_val & 0x0F) as u8)?;
+            imu.i2c
+                .write_reg(bmi270_reg::INIT_ADDR_1, (addr_val >> 4) as u8)?;
 
             // Calculate chunk end
             let end = (offset + chunk_size).min(BMI270_CONFIG_FILE.len());
@@ -631,26 +584,22 @@ where
 
             // Write chunk: first byte is register address, then data
             let mut buf = [0u8; 33]; // 1 register + 32 data bytes max
-            buf[0] = reg::INIT_DATA;
+            buf[0] = bmi270_reg::INIT_DATA;
             buf[1..1 + chunk.len()].copy_from_slice(chunk);
 
-            imu.i2c
-                .i2c
-                .borrow_mut()
-                .write(BMI270_I2C_ADDR, &buf[..1 + chunk.len()])
-                .map_err(Error::Bus)?;
+            imu.i2c.write(&buf[..1 + chunk.len()])?;
 
             offset = end;
         }
 
         // Start initialization
-        imu.write_reg(reg::INIT_CTRL, 0x01)?;
+        imu.i2c.write_reg(bmi270_reg::INIT_CTRL, 0x01)?;
 
         // Wait for initialization to complete
         let mut init_ok = false;
         for _ in 0..50 {
             delay.delay_ms(10);
-            let status = imu.read_reg(reg::INTERNAL_STATUS)?;
+            let status = imu.i2c.read_reg(bmi270_reg::INTERNAL_STATUS)?;
             let msg = status & 0x0F;
             if msg == 0x01 {
                 init_ok = true;
@@ -666,21 +615,21 @@ where
         }
 
         // Disable advanced power save mode
-        imu.write_reg(reg::PWR_CONF, 0x00)?;
+        imu.i2c.write_reg(bmi270_reg::PWR_CONF, 0x00)?;
         delay.delay_ms(1);
 
         // Enable accelerometer and gyroscope (no aux)
         // PWR_CTRL: bit 2 = acc_en, bit 1 = gyr_en
-        imu.write_reg(reg::PWR_CTRL, 0x0E)?; // acc_en + gyr_en + temp_en
+        imu.i2c.write_reg(bmi270_reg::PWR_CTRL, 0x0E)?; // acc_en + gyr_en + temp_en
         delay.delay_ms(50);
 
         // Configure accelerometer: 100Hz ODR, normal mode, +/-8g
-        imu.write_reg(reg::ACC_CONF, 0xA8)?;
-        imu.write_reg(reg::ACC_RANGE, 0x02)?;
+        imu.i2c.write_reg(bmi270_reg::ACC_CONF, 0xA8)?;
+        imu.i2c.write_reg(bmi270_reg::ACC_RANGE, 0x02)?;
 
         // Configure gyroscope: 200Hz ODR, normal mode, +/-2000dps
-        imu.write_reg(reg::GYR_CONF, 0xA9)?;
-        imu.write_reg(reg::GYR_RANGE, 0x00)?;
+        imu.i2c.write_reg(bmi270_reg::GYR_CONF, 0xA9)?;
+        imu.i2c.write_reg(bmi270_reg::GYR_RANGE, 0x00)?;
 
         Ok(imu)
     }
@@ -688,7 +637,7 @@ where
     /// Read accelerometer and gyroscope data
     pub fn read(&self) -> Result<ImuData, Error<E>> {
         let mut buf = [0u8; 12];
-        self.read_regs(reg::ACC_DATA_0, &mut buf)?;
+        self.i2c.read_regs(bmi270_reg::ACC_DATA_0, &mut buf)?;
 
         Ok(ImuData {
             acc_x: i16::from_le_bytes([buf[0], buf[1]]),
@@ -705,7 +654,7 @@ where
         defmt::info!("Scanning I2C bus for devices...");
         let mut found = 0;
         for addr in 0x03..=0x77 {
-            if self.i2c.i2c.borrow_mut().write(addr, &[]).is_ok() {
+            if self.i2c.write(&[]).is_ok() {
                 defmt::info!("Found device at address {:#x}", addr);
                 found += 1;
             }
@@ -716,7 +665,7 @@ where
 
 /// Shared BMM350 magnetometer driver (uses shared I2C bus)
 pub struct SharedBmm350<'a, I2C> {
-    i2c: &'a SharedI2c<I2C>,
+    i2c: SharedI2cDevice<'a, BMM350_I2C_ADDR, I2C>,
 }
 
 impl<'a, I2C, E> SharedBmm350<'a, I2C>
@@ -725,21 +674,13 @@ where
     E: defmt::Format,
 {
     fn write_reg(&self, register: u8, value: u8) -> Result<(), Error<E>> {
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write(BMM350_I2C_ADDR, &[register, value])
-            .map_err(Error::Bus)
+        self.i2c.write_reg(register, value)
     }
 
     fn read_reg(&self, register: u8) -> Result<u8, Error<E>> {
         // BMM350 uses 2 dummy bytes protocol - first 2 bytes after register address are dummy
         let mut buf = [0u8; 3];
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write_read(BMM350_I2C_ADDR, &[register], &mut buf)
-            .map_err(Error::Bus)?;
+        self.i2c.read_regs(register, &mut buf)?;
         // buf[0], buf[1] are dummy, buf[2] is actual data
         Ok(buf[2])
     }
@@ -749,11 +690,8 @@ where
         // We need to read len+2 bytes and skip the first 2
         let len = buf.len();
         let mut tmp = [0u8; 18]; // Max we'll ever need (9 bytes data + 2 dummy)
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write_read(BMM350_I2C_ADDR, &[register], &mut tmp[..len + 2])
-            .map_err(Error::Bus)?;
+
+        self.i2c.read_regs(register, &mut tmp[..len + 2])?;
         // Skip 2 dummy bytes (tmp[0], tmp[1]), copy rest to buf
         buf.copy_from_slice(&tmp[2..len + 2]);
         Ok(())
@@ -783,6 +721,7 @@ where
         i2c: &'a SharedI2c<I2C>,
         delay: &mut D,
     ) -> Result<Self, Error<E>> {
+        let i2c = i2c.device_with_address::<BMM350_I2C_ADDR>();
         let mag = Self { i2c };
 
         // Wait for BMM350 power-up (1ms from datasheet)
@@ -849,226 +788,6 @@ where
         let raw_x = (buf[0] as u32) | ((buf[1] as u32) << 8) | ((buf[2] as u32) << 16);
         let raw_y = (buf[3] as u32) | ((buf[4] as u32) << 8) | ((buf[5] as u32) << 16);
         let raw_z = (buf[6] as u32) | ((buf[7] as u32) << 8) | ((buf[8] as u32) << 16);
-
-        Ok(MagData {
-            x: sign_extend_24bit(raw_x),
-            y: sign_extend_24bit(raw_y),
-            z: sign_extend_24bit(raw_z),
-        })
-    }
-}
-
-/// BMM350 magnetometer driver using BMI270's auxiliary I2C interface
-///
-/// This driver accesses the BMM350 through the BMI270's built-in aux I2C master,
-/// which is the intended hardware design (BMM350 connected to BMI270's aux pins).
-pub struct AuxBmm350<'a, I2C> {
-    i2c: &'a SharedI2c<I2C>,
-}
-
-impl<'a, I2C, E> AuxBmm350<'a, I2C>
-where
-    I2C: I2cTrait<Error = E>,
-    E: defmt::Format,
-{
-    fn bmi270_write_reg(&self, register: u8, value: u8) -> Result<(), Error<E>> {
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write(BMI270_I2C_ADDR, &[register, value])
-            .map_err(Error::Bus)
-    }
-
-    fn bmi270_read_reg(&self, register: u8) -> Result<u8, Error<E>> {
-        let mut buf = [0u8];
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write_read(BMI270_I2C_ADDR, &[register], &mut buf)
-            .map_err(Error::Bus)?;
-        Ok(buf[0])
-    }
-
-    fn bmi270_read_regs(&self, register: u8, buf: &mut [u8]) -> Result<(), Error<E>> {
-        self.i2c
-            .i2c
-            .borrow_mut()
-            .write_read(BMI270_I2C_ADDR, &[register], buf)
-            .map_err(Error::Bus)
-    }
-
-    /// Write to BMM350 register via aux interface
-    fn aux_write_reg<D: embedded_hal::delay::DelayNs>(
-        &self,
-        bmm_reg: u8,
-        value: u8,
-        delay: &mut D,
-    ) -> Result<(), Error<E>> {
-        self.bmi270_write_reg(reg::AUX_WR_ADDR, bmm_reg)?;
-        self.bmi270_write_reg(reg::AUX_WR_DATA, value)?;
-        delay.delay_us(500);
-        Ok(())
-    }
-
-    /// Read from BMM350 register via aux interface (with 2 dummy bytes)
-    fn aux_read_reg<D: embedded_hal::delay::DelayNs>(
-        &self,
-        bmm_reg: u8,
-        delay: &mut D,
-    ) -> Result<u8, Error<E>> {
-        // Set read address
-        self.bmi270_write_reg(reg::AUX_RD_ADDR, bmm_reg)?;
-        delay.delay_ms(2);
-
-        // Read from AUX_DATA registers - try reading more bytes to see what we get
-        let mut buf = [0u8; 8];
-        self.bmi270_read_regs(reg::AUX_DATA_0, &mut buf)?;
-        defmt::info!("AUX read reg {:#x}: {:?}", bmm_reg, buf);
-        // BMM350 has 2 dummy bytes: buf[0], buf[1] are dummy, buf[2] is actual data
-        Ok(buf[2])
-    }
-
-    /// Wait for PMU command to complete
-    fn wait_pmu_cmd<D: embedded_hal::delay::DelayNs>(
-        &self,
-        expected_cmd: u8,
-        delay: &mut D,
-    ) -> Result<(), Error<E>> {
-        for _ in 0..20 {
-            delay.delay_ms(2);
-            let status = self.aux_read_reg(bmm350_reg::PMU_CMD_STATUS_0, delay)?;
-            let busy = (status & 0x01) != 0;
-            let cmd_value = (status >> 5) & 0x07;
-            if !busy && cmd_value == expected_cmd {
-                return Ok(());
-            }
-        }
-        defmt::warn!("BMM350 PMU command timeout");
-        Ok(())
-    }
-
-    /// Create and initialize BMM350 via BMI270's auxiliary I2C interface
-    pub fn new<D: embedded_hal::delay::DelayNs>(
-        i2c: &'a SharedI2c<I2C>,
-        delay: &mut D,
-    ) -> Result<Self, Error<E>> {
-        let mag = Self { i2c };
-
-        defmt::info!("Initializing BMM350 via BMI270 aux interface...");
-
-        // Enable auxiliary interface on BMI270
-        // First, disable power save mode
-        mag.bmi270_write_reg(reg::PWR_CONF, 0x00)?;
-        delay.delay_ms(1);
-
-        // Enable aux in PWR_CTRL (bit 0 = aux_en)
-        let pwr_ctrl = mag.bmi270_read_reg(reg::PWR_CTRL)?;
-        defmt::info!("PWR_CTRL before: {:#x}", pwr_ctrl);
-        mag.bmi270_write_reg(reg::PWR_CTRL, pwr_ctrl | 0x01)?;
-        delay.delay_ms(10);
-
-        let pwr_ctrl_after = mag.bmi270_read_reg(reg::PWR_CTRL)?;
-        defmt::info!("PWR_CTRL after: {:#x}", pwr_ctrl_after);
-
-        // Set BMM350 I2C address (0x14 << 1 = 0x28)
-        mag.bmi270_write_reg(reg::AUX_DEV_ID, BMM350_I2C_ADDR << 1)?;
-        let aux_dev_id = mag.bmi270_read_reg(reg::AUX_DEV_ID)?;
-        defmt::info!("AUX_DEV_ID: {:#x}", aux_dev_id);
-
-        // Configure aux interface: manual mode, FCU write enable
-        // AUX_IF_CONF: bit 7 = manual_en, bit 6 = fcu_write_en, bits 1:0 = burst length
-        mag.bmi270_write_reg(reg::AUX_IF_CONF, 0x80 | 0x40 | 0x03)?; // manual, fcu_write, 8-byte burst
-        delay.delay_ms(1);
-
-        let aux_if_conf = mag.bmi270_read_reg(reg::AUX_IF_CONF)?;
-        defmt::info!("AUX_IF_CONF: {:#x}", aux_if_conf);
-
-        // Configure AUX_CONF ODR
-        mag.bmi270_write_reg(reg::AUX_CONF, 0x06)?; // 100Hz
-        delay.delay_ms(5);
-
-        // Check for errors
-        let err_reg = mag.bmi270_read_reg(reg::ERR_REG)?;
-        let status = mag.bmi270_read_reg(reg::STATUS)?;
-        defmt::info!("ERR_REG: {:#x}, STATUS: {:#x}", err_reg, status);
-
-        // Soft reset BMM350
-        defmt::info!("Sending soft reset to BMM350...");
-        mag.aux_write_reg(bmm350_reg::CMD, BMM350_SOFT_RESET, delay)?;
-        delay.delay_ms(30);
-
-        // Check for errors after write
-        let err_reg = mag.bmi270_read_reg(reg::ERR_REG)?;
-        defmt::info!("ERR_REG after reset: {:#x}", err_reg);
-
-        // Read chip ID (with dummy bytes handled)
-        let chip_id = mag.aux_read_reg(bmm350_reg::CHIP_ID, delay)?;
-        if chip_id != BMM350_CHIP_ID {
-            defmt::warn!(
-                "BMM350 chip ID mismatch: {:#x} (expected {:#x})",
-                chip_id,
-                BMM350_CHIP_ID
-            );
-            return Err(Error::InvalidChipId(chip_id));
-        }
-
-        // Power off OTP
-        mag.aux_write_reg(bmm350_reg::OTP_CMD_REG, 0x80, delay)?;
-        delay.delay_ms(5);
-
-        // Magnetic reset sequence
-        // 1. Bit Reset
-        mag.aux_write_reg(bmm350_reg::PMU_CMD, bmm350_pmu::BIT_RESET, delay)?;
-        delay.delay_ms(14);
-        mag.wait_pmu_cmd(bmm350_pmu::BIT_RESET, delay)?;
-
-        // 2. Flux Guide Reset
-        mag.aux_write_reg(bmm350_reg::PMU_CMD, bmm350_pmu::FLUX_GUIDE_RESET, delay)?;
-        delay.delay_ms(18);
-        mag.wait_pmu_cmd(bmm350_pmu::FLUX_GUIDE_RESET, delay)?;
-
-        // Enable all axes
-        mag.aux_write_reg(bmm350_reg::PMU_CMD_AXIS_EN, 0x07, delay)?;
-        delay.delay_ms(1);
-
-        // Set ODR to 100Hz with 4x averaging
-        let odr_avg = bmm350_odr::ODR_100HZ | bmm350_avg::AVG_4;
-        mag.aux_write_reg(bmm350_reg::PMU_CMD_AGGR_SET, odr_avg, delay)?;
-        delay.delay_ms(1);
-
-        // Apply ODR/AVG settings
-        mag.aux_write_reg(bmm350_reg::PMU_CMD, bmm350_pmu::UPDATE_OAE, delay)?;
-        delay.delay_ms(2);
-        mag.wait_pmu_cmd(bmm350_pmu::UPDATE_OAE, delay)?;
-
-        // Set normal mode
-        mag.aux_write_reg(bmm350_reg::PMU_CMD, bmm350_pmu::NORMAL, delay)?;
-        delay.delay_ms(38);
-        mag.wait_pmu_cmd(bmm350_pmu::NORMAL, delay)?;
-
-        // Switch to automatic read mode for continuous data
-        // Set the read address to mag data start
-        mag.bmi270_write_reg(reg::AUX_RD_ADDR, bmm350_reg::MAG_X_XLSB)?;
-        // Disable manual mode (bit 7 = 0), keep 8-byte burst
-        mag.bmi270_write_reg(reg::AUX_IF_CONF, 0x03)?;
-
-        defmt::info!("BMM350 initialized via aux (chip_id={:#x})", chip_id);
-        Ok(mag)
-    }
-
-    /// Read magnetometer data from aux data registers
-    ///
-    /// In automatic mode, BMI270 continuously reads from BMM350 and buffers
-    /// the data in AUX_DATA registers. Data includes 2 dummy bytes.
-    pub fn read(&self) -> Result<MagData, Error<E>> {
-        // Read 11 bytes: 2 dummy + 9 data (X, Y, Z each 3 bytes)
-        let mut buf = [0u8; 11];
-        self.bmi270_read_regs(reg::AUX_DATA_0, &mut buf)?;
-
-        // Skip 2 dummy bytes
-        let raw_x = (buf[2] as u32) | ((buf[3] as u32) << 8) | ((buf[4] as u32) << 16);
-        let raw_y = (buf[5] as u32) | ((buf[6] as u32) << 8) | ((buf[7] as u32) << 16);
-        let raw_z = (buf[8] as u32) | ((buf[9] as u32) << 8) | ((buf[10] as u32) << 16);
 
         Ok(MagData {
             x: sign_extend_24bit(raw_x),
