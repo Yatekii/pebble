@@ -3,7 +3,9 @@
 //! Provides sensor fusion for IMU data to get stable orientation estimates.
 
 use ahrs::{Ahrs as AhrsTrait, Madgwick};
+use defmt::error;
 use nalgebra::Vector3;
+use uom::si::f32::{Acceleration, AngularVelocity, Length, MagneticFluxDensity};
 
 /// Sample period in seconds (assuming 10Hz IMU update rate)
 const SAMPLE_PERIOD: f32 = 0.1;
@@ -75,16 +77,21 @@ impl AhrsFilter {
     #[allow(dead_code)]
     pub fn update_marg(
         &mut self,
-        accel: (f32, f32, f32),
-        gyro: (f32, f32, f32),
-        mag: (f32, f32, f32),
+        acceleration: Vector3<Acceleration>,
+        angular_velocity: Vector3<AngularVelocity>,
+        magnetometer: Vector3<MagneticFluxDensity>,
     ) -> Orientation {
-        let accel_vec = Vector3::new(accel.0, accel.1, accel.2);
-        let gyro_vec = Vector3::new(gyro.0, gyro.1, gyro.2);
-        let mag_vec = Vector3::new(mag.0, mag.1, mag.2);
+        let acceleration = acceleration.map(|a| a.value);
+        let angular_velocity = angular_velocity.map(|a| a.value);
+        let magnetometer = magnetometer.map(|m| m.value);
 
         // Update filter (ignore error, filter still updates internal state)
-        let _ = self.filter.update(&gyro_vec, &accel_vec, &mag_vec);
+        if let Err(error) = self
+            .filter
+            .update(&angular_velocity, &acceleration, &magnetometer)
+        {
+            error!("Updating AHRS had an issue: {:?}", error);
+        }
 
         self.orientation()
     }

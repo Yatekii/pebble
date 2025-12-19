@@ -10,48 +10,55 @@ use embedded_hal::i2c::I2c as I2cTrait;
 use esp_hal::Blocking;
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::time::Rate;
+use nalgebra::Vector3;
+use uom::si::f32::{Acceleration, AngularVelocity};
 
 use crate::hal::imu::constants::{
     BMI270_CHIP_ID, BMI270_I2C_ADDR, BMM350_CHIP_ID, BMM350_I2C_ADDR, BMM350_SOFT_RESET,
     bmi270_reg, bmm350_avg, bmm350_odr, bmm350_pmu, bmm350_reg,
 };
 use crate::hal::peripherals::i2c::{Error, SharedI2c, SharedI2cDevice};
+use crate::math::rotate_90ccw;
 
 /// Accelerometer and gyroscope data
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ImuData {
-    pub acc_x: i16,
-    pub acc_y: i16,
-    pub acc_z: i16,
-    pub gyr_x: i16,
-    pub gyr_y: i16,
-    pub gyr_z: i16,
+    acc_x: i16,
+    acc_y: i16,
+    acc_z: i16,
+    gyr_x: i16,
+    gyr_y: i16,
+    gyr_z: i16,
 }
 
 impl ImuData {
-    /// Convert accelerometer readings to g (assuming +/-8g range)
-    /// BMI270 with 8g range: 1g = 4096 LSB
-    pub fn accel_g(&self) -> (f32, f32, f32) {
-        const SCALE: f32 = 1.0 / 4096.0; // 8g range
-        (
-            self.acc_x as f32 * SCALE,
-            self.acc_y as f32 * SCALE,
-            self.acc_z as f32 * SCALE,
-        )
+    /// Return the transformed and calibrated accelerometer reading
+    /// Convert accelerometer readings to g (assuming +/-8g range)s
+    pub fn acceleration(&self) -> Vector3<Acceleration> {
+        /// BMI270 with 8g range: 1g = 4096 LSB
+        const SCALE: f32 = 1.0 / 4096.0;
+
+        rotate_90ccw(Vector3::new(self.acc_x as f32, self.acc_y as f32, self.acc_z as f32) * SCALE)
+            .map(Acceleration::new::<uom::si::acceleration::meter_per_second_squared>)
     }
 
-    /// Convert gyroscope readings to rad/s (assuming +/-2000 dps range)
-    /// BMI270 with 2000dps range: 1 dps = 16.384 LSB
-    pub fn gyro_rads(&self) -> (f32, f32, f32) {
-        // Convert to degrees per second first, then to radians
-        const DPS_SCALE: f32 = 1.0 / 16.384; // 2000 dps range
-        const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
-        const SCALE: f32 = DPS_SCALE * DEG_TO_RAD;
-        (
-            self.gyr_x as f32 * SCALE,
-            self.gyr_y as f32 * SCALE,
-            self.gyr_z as f32 * SCALE,
-        )
+    /// Return the transformed and calibrated gyroscope reading
+    pub fn angular_velocity(&self) -> Vector3<AngularVelocity> {
+        /// BMI270 with 2000dps range: 1 dps = 16.384 LSB
+        const SCALE: f32 = 1.0 / 16.384;
+
+        rotate_90ccw(Vector3::new(self.gyr_x as f32, self.gyr_y as f32, self.gyr_z as f32) * SCALE)
+            .map(AngularVelocity::new::<uom::si::angular_velocity::degree_per_second>)
+    }
+
+    /// Return the raw accelerometer reading
+    pub fn raw_acceleration(&self) -> Vector3<i16> {
+        Vector3::new(self.acc_x, self.acc_y, self.acc_z)
+    }
+
+    /// Return the raw gyroscope reading
+    pub fn raw_angular_velocity(&self) -> Vector3<i16> {
+        Vector3::new(self.gyr_x, self.gyr_y, self.gyr_z)
     }
 }
 
@@ -438,27 +445,6 @@ fn sign_extend_24bit(value: u32) -> i32 {
     } else {
         value as i32
     }
-}
-
-/// Initialize the IMU with the given I2C peripheral and GPIO pins
-///
-/// Uses GPIO2 for SDA and GPIO3 for SCL.
-pub fn init(
-    i2c0: esp_hal::peripherals::I2C0<'static>,
-    sda: esp_hal::peripherals::GPIO2<'static>,
-    scl: esp_hal::peripherals::GPIO3<'static>,
-    delay: &mut impl embedded_hal::delay::DelayNs,
-) -> Result<Imu<I2c<'static, Blocking>>, Error<esp_hal::i2c::master::Error>> {
-    // Use 400kHz (Fast Mode) - both BMI270 and BMM350 support this
-    let i2c = I2c::new(
-        i2c0,
-        I2cConfig::default().with_frequency(Rate::from_khz(400)),
-    )
-    .map_err(|_| Error::I2cCreate)?
-    .with_sda(sda)
-    .with_scl(scl);
-
-    Imu::new(i2c, delay)
 }
 
 /// IMU that uses shared I2C bus (for when BMM350 is on the same bus)
