@@ -2,14 +2,15 @@
 
 use defmt::{debug, info};
 use embassy_time::{Duration, Timer};
-use embedded_hal::i2c::I2c as I2cTrait;
+use embedded_hal::i2c::I2c;
 use nalgebra::Vector3;
-use uom::si::f32::{Length, MagneticFluxDensity};
-use uom::si::magnetic_flux_density::tesla;
+use uom::si::f32::MagneticFluxDensity;
+use uom::si::magnetic_flux_density::microtesla;
 
 use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
 use crate::hal::ahrs::AhrsFilter;
-use crate::hal::imu::{SharedBmi270, SharedBmm350};
+use crate::hal::imu::bmi270::SharedBmi270;
+use crate::hal::imu::bmm350::SharedBmm350;
 use crate::math::correct_centripetal;
 use crate::state::{COMPASS_HEADING, SENSOR_DATA, SensorData};
 
@@ -18,27 +19,27 @@ const IMU_OFFSET: Vector3<f32> = Vector3::new(0.045, 0.0, 0.0);
 
 /// Hard iron calibration state for magnetometer.
 struct MagCalibration {
-    x_min: i32,
-    x_max: i32,
-    y_min: i32,
-    y_max: i32,
-    z_min: i32,
-    z_max: i32,
+    x_min: f32,
+    x_max: f32,
+    y_min: f32,
+    y_max: f32,
+    z_min: f32,
+    z_max: f32,
 }
 
 impl MagCalibration {
     fn new() -> Self {
         Self {
-            x_min: i32::MAX,
-            x_max: i32::MIN,
-            y_min: i32::MAX,
-            y_max: i32::MIN,
-            z_min: i32::MAX,
-            z_max: i32::MIN,
+            x_min: f32::MAX,
+            x_max: f32::MIN,
+            y_min: f32::MAX,
+            y_max: f32::MIN,
+            z_min: f32::MAX,
+            z_max: f32::MIN,
         }
     }
 
-    fn update(&mut self, x: i32, y: i32, z: i32) {
+    fn update(&mut self, x: f32, y: f32, z: f32) {
         if x < self.x_min {
             self.x_min = x;
         }
@@ -59,20 +60,19 @@ impl MagCalibration {
         }
     }
 
-    fn apply(&self, x: i32, y: i32, z: i32) -> (f32, f32, f32) {
-        let x_offset = (self.x_min + self.x_max) / 2;
-        let y_offset = (self.y_min + self.y_max) / 2;
-        let z_offset = (self.z_min + self.z_max) / 2;
+    fn apply(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+        let x_offset = (self.x_min + self.x_max) / 2.0;
+        let y_offset = (self.y_min + self.y_max) / 2.0;
+        let z_offset = (self.z_min + self.z_max) / 2.0;
 
-        (
-            (x - x_offset) as f32,
-            (y - y_offset) as f32,
-            (z - z_offset) as f32,
-        )
+        (x - x_offset, y - y_offset, z - z_offset)
     }
 
-    fn offsets(&self) -> (i32, i32) {
-        ((self.x_min + self.x_max) / 2, (self.y_min + self.y_max) / 2)
+    fn offsets(&self) -> (f32, f32) {
+        (
+            (self.x_min + self.x_max) / 2.0,
+            (self.y_min + self.y_max) / 2.0,
+        )
     }
 }
 
@@ -82,7 +82,7 @@ impl MagCalibration {
 /// and broadcasts sensor data and compass heading.
 pub async fn run<I2C, E>(imu: &SharedBmi270<'_, I2C>, magnetometer: Option<&SharedBmm350<'_, I2C>>)
 where
-    I2C: I2cTrait<Error = E>,
+    I2C: I2c<Error = E>,
     E: defmt::Format,
 {
     let mut ahrs = AhrsFilter::new();
@@ -98,7 +98,6 @@ where
         Timer::after(Duration::from_millis(100)).await;
 
         let imu_result = imu.read();
-
         let mag_result = magnetometer.read();
 
         let mut data = SensorData::default();
@@ -109,19 +108,31 @@ where
             continue;
         };
 
+        // Get values in microtesla for processing
+        let x_ut = mag_data.x.get::<microtesla>();
+        let y_ut = mag_data.y.get::<microtesla>();
+        let z_ut = mag_data.z.get::<microtesla>();
+
+        // Store raw values for BLE (in microtesla * 100 as i32 for precision)
         data.mag = MagBleData {
-            x: mag_data.x,
-            y: mag_data.y,
-            z: mag_data.z,
+            x: (x_ut * 100.0) as i32,
+            y: (y_ut * 100.0) as i32,
+            z: (z_ut * 100.0) as i32,
         };
 
         // Update and apply hard iron calibration
-        mag_cal.update(mag_data.x, mag_data.y, mag_data.z);
-        let (x, y, z) = mag_cal.apply(mag_data.x, mag_data.y, mag_data.z);
-        let mag_calibrated = Vector3::new(x, y, z).map(MagneticFluxDensity::new::<tesla>);
+        mag_cal.update(x_ut, y_ut, z_ut);
+        let (x_cal, y_cal, z_cal) = mag_cal.apply(x_ut, y_ut, z_ut);
+
+        // Create calibrated magnetic field vector for AHRS
+        let mag_calibrated = Vector3::new(
+            MagneticFluxDensity::new::<microtesla>(x_cal),
+            MagneticFluxDensity::new::<microtesla>(y_cal),
+            MagneticFluxDensity::new::<microtesla>(z_cal),
+        );
 
         // Calculate compass heading from magnetometer X and Y
-        let heading_rad = libm::atan2f(y, x);
+        let heading_rad = libm::atan2f(y_cal, x_cal);
         let mut heading_deg = heading_rad * 180.0 / core::f32::consts::PI;
         if heading_deg < 0.0 {
             heading_deg += 360.0;
@@ -130,25 +141,25 @@ where
         let (x_off, y_off) = mag_cal.offsets();
         info!(
             "MAG: x={} y={} heading={} (cal: x_off={} y_off={})",
-            mag_data.x, mag_data.y, heading_deg as i32, x_off, y_off
+            x_ut as i32, y_ut as i32, heading_deg as i32, x_off as i32, y_off as i32
         );
         COMPASS_HEADING.sender().send(heading_deg as u16);
 
         if let Ok(imu_data) = &imu_result {
             // Convert to physical units and rotate for PCB orientation
             let acceleration_corrected = imu_data.acceleration();
-            let angular_valocity_corrected = imu_data.angular_velocity();
+            let angular_velocity_corrected = imu_data.angular_velocity();
 
             // Correct for centripetal acceleration
             let acceleration = correct_centripetal(
                 acceleration_corrected,
-                angular_valocity_corrected,
+                angular_velocity_corrected,
                 IMU_OFFSET,
             );
 
             // Update AHRS filter
             let orientation =
-                ahrs.update_marg(acceleration, angular_valocity_corrected, mag_calibrated);
+                ahrs.update_marg(acceleration, angular_velocity_corrected, mag_calibrated);
 
             // Log orientation periodically (every 50 samples = 5 seconds)
             sample_count += 1;

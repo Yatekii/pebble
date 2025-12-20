@@ -106,7 +106,7 @@ async fn main(_spawner: Spawner) -> ! {
     );
 
     // Initialize IMU on shared bus
-    let imu = match imu::SharedBmi270::new(shared_i2c, &mut delay) {
+    let imu = match imu::bmi270::SharedBmi270::new(shared_i2c, &mut delay) {
         Ok(imu) => {
             info!("IMU initialized successfully");
             imu
@@ -117,7 +117,7 @@ async fn main(_spawner: Spawner) -> ! {
     };
 
     // Initialize magnetometer directly on shared I2C bus
-    let magnetometer = match imu::SharedBmm350::new(shared_i2c, &mut delay) {
+    let magnetometer = match imu::bmm350::SharedBmm350::new(shared_i2c, &mut delay) {
         Ok(magnetometer) => {
             info!("Magnetometer initialized successfully");
             Some(magnetometer)

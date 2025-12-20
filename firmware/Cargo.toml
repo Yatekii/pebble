@@ -80,6 +80,8 @@ static_cell      = "2.1.1"
 
 ahrs = { version = "0.6", default-features = false }
 bmi2 = "0.1.1"
+nmea = { version = "0.7", default-features = false, features = ["GNSS"] }
+chrono = { version = "0.4", default-features = false }
 embedded-hal = "1.0.0"
 libm = "0.2"
 nalgebra = { version = "0.31", default-features = false, features = ["libm"] }

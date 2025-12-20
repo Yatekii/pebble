@@ -6,3 +6,4 @@ pub mod math;
 mod nvs_stubs;
 pub mod state;
 pub mod tasks;
+pub mod util;

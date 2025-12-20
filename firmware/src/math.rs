@@ -24,3 +24,26 @@ pub fn correct_centripetal(
             .cross(&angular_velocity.map(|a| a.value).cross(&offset)))
     .map(Acceleration::new::<meter_per_second_squared>)
 }
+
+/// Convert quaternion to Euler angles (roll, pitch, yaw) in radians
+pub fn quaternion_to_euler(x: f32, y: f32, z: f32, w: f32) -> (f32, f32, f32) {
+    // Roll (x-axis rotation)
+    let sinr_cosp = 2.0 * (w * x + y * z);
+    let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
+    let roll = libm::atan2f(sinr_cosp, cosr_cosp);
+
+    // Pitch (y-axis rotation)
+    let sinp = 2.0 * (w * y - z * x);
+    let pitch = if libm::fabsf(sinp) >= 1.0 {
+        libm::copysignf(core::f32::consts::FRAC_PI_2, sinp) // Use 90 degrees if out of range
+    } else {
+        libm::asinf(sinp)
+    };
+
+    // Yaw (z-axis rotation)
+    let siny_cosp = 2.0 * (w * z + x * y);
+    let cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+    let yaw = libm::atan2f(siny_cosp, cosy_cosp);
+
+    (roll, pitch, yaw)
+}
