@@ -1,30 +1,68 @@
-//! BMM350 3-axis magnetometer driver
+//! BMM350 3-axis magnetometer driver with temperature compensation
 //!
-//! The BMM350 provides magnetic field measurements in 21-bit signed format.
-//! Raw values are converted to microtesla (µT) using scaling factors from
-//! the Bosch sensor API.
+//! The BMM350 provides magnetic field measurements in 24-bit signed format.
+//! This driver implements the full compensation algorithm from the Bosch
+//! BMM350 Sensor API, including:
+//! - Per-chip OTP calibration data
+//! - Temperature compensation (TCO and TCS)
+//! - Cross-axis compensation
 
 use embedded_hal::i2c::I2c;
 use uom::si::f32::MagneticFluxDensity;
 use uom::si::magnetic_flux_density::microtesla;
 
 use crate::hal::imu::constants::{
-    BMM350_CHIP_ID, BMM350_I2C_ADDR, BMM350_SOFT_RESET, bmm350_avg, bmm350_odr, bmm350_pmu,
-    bmm350_reg,
+    BMM350_CHIP_ID, BMM350_I2C_ADDR, BMM350_SOFT_RESET, bmm350_avg, bmm350_odr, bmm350_otp,
+    bmm350_pmu, bmm350_reg,
 };
 use crate::hal::peripherals::i2c::{Error, SharedI2c, SharedI2cDevice};
-use crate::util::sign_extend_21bit;
+use crate::util::{sign_extend_8bit, sign_extend_12bit, sign_extend_16bit, sign_extend_24bit};
 
-/// Sensitivity coefficient for LSB to microtesla conversion.
-///
-/// BMM350 has a measurement range of ±2000 µT with 21-bit signed resolution.
-/// 21-bit signed = 20 bits for magnitude = 2^20 steps
-/// 1 LSB = 2000 µT / 2^20 = 0.0019073486 µT/LSB
-const LSB_TO_UT: f32 = 2000.0 / 1_048_576.0;
+// LSB to physical unit conversion factors from Bosch API
+// Base: 1,000,000 / 1,048,576 (24-bit to µT base)
+// With sensitivity and gain factors applied
+const LSB_TO_UT_XY: f32 = (1_000_000.0 / 1_048_576.0) / (14.55 * 19.46 * 0.6667 * 0.7146);
+const LSB_TO_UT_Z: f32 = (1_000_000.0 / 1_048_576.0) / (9.0 * 31.0 * 0.6667 * 0.7146);
+const LSB_TO_DEGC: f32 = 1.0 / (0.00204 * 0.6667 * 0.7146 * 1_048_576.0);
+
+// Correction constants from Bosch API
+const SENS_CORR_Y: f32 = 0.01;
+const TCS_CORR_Z: f32 = 0.0001;
+
+/// OTP calibration data for compensation
+#[derive(Debug, Clone, Default)]
+pub struct CompensationData {
+    // Offset coefficients
+    pub t_offs: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub offset_z: f32,
+    // Sensitivity coefficients
+    pub t_sens: f32,
+    pub sens_x: f32,
+    pub sens_y: f32,
+    pub sens_z: f32,
+    // Temperature coefficient of offset
+    pub tco_x: f32,
+    pub tco_y: f32,
+    pub tco_z: f32,
+    // Temperature coefficient of sensitivity
+    pub tcs_x: f32,
+    pub tcs_y: f32,
+    pub tcs_z: f32,
+    // Reference temperature
+    pub dut_t0: f32,
+    // Cross-axis coupling
+    pub cross_x_y: f32,
+    pub cross_y_x: f32,
+    pub cross_z_x: f32,
+    pub cross_z_y: f32,
+}
 
 /// Shared BMM350 magnetometer driver (uses shared I2C bus)
 pub struct SharedBmm350<'a, I2C> {
     i2c: SharedI2cDevice<'a, BMM350_I2C_ADDR, I2C>,
+    comp: CompensationData,
 }
 
 impl<'a, I2C, E> SharedBmm350<'a, I2C>
@@ -40,20 +78,119 @@ where
         // BMM350 uses 2 dummy bytes protocol - first 2 bytes after register address are dummy
         let mut buf = [0u8; 3];
         self.i2c.read_regs(register, &mut buf)?;
-        // buf[0], buf[1] are dummy, buf[2] is actual data
         Ok(buf[2])
     }
 
     fn read_regs(&self, register: u8, buf: &mut [u8]) -> Result<(), Error<E>> {
         // BMM350 uses 2 dummy bytes protocol
-        // We need to read len+2 bytes and skip the first 2
         let len = buf.len();
-        let mut tmp = [0u8; 18]; // Max we'll ever need (9 bytes data + 2 dummy)
+        let mut tmp = [0u8; 18]; // Max we'll ever need (12 bytes data + 2 dummy)
 
         self.i2c.read_regs(register, &mut tmp[..len + 2])?;
-        // Skip 2 dummy bytes (tmp[0], tmp[1]), copy rest to buf
         buf.copy_from_slice(&tmp[2..len + 2]);
         Ok(())
+    }
+
+    /// Read a single OTP word at specified address
+    fn read_otp_word<D: embedded_hal::delay::DelayNs>(
+        &self,
+        addr: u8,
+        delay: &mut D,
+    ) -> Result<u16, Error<E>> {
+        // Set OTP command: read word at address
+        self.write_reg(bmm350_reg::OTP_CMD_REG, 0x20 | (addr & 0x1F))?;
+
+        // Wait for OTP read to complete
+        for _ in 0..20 {
+            delay.delay_ms(1);
+            let status = self.read_reg(bmm350_reg::OTP_STATUS)?;
+            // Check for errors (bits 5-1) and completion (bit 0 = 0)
+            if status & 0x3E != 0 {
+                defmt::warn!("OTP read error: status={:#x}", status);
+                return Err(Error::OtpError);
+            }
+            if status & 0x01 == 0 {
+                // Read complete, get data
+                let msb = self.read_reg(bmm350_reg::OTP_DATA_MSB)?;
+                let lsb = self.read_reg(bmm350_reg::OTP_DATA_LSB)?;
+                return Ok(((msb as u16) << 8) | (lsb as u16));
+            }
+        }
+        defmt::warn!("OTP read timeout");
+        Err(Error::Timeout)
+    }
+
+    /// Read all OTP calibration data and extract compensation coefficients
+    fn read_otp_data<D: embedded_hal::delay::DelayNs>(
+        &self,
+        delay: &mut D,
+    ) -> Result<CompensationData, Error<E>> {
+        // Read all 32 OTP words
+        let mut otp = [0u16; 32];
+        for (i, word) in otp.iter_mut().enumerate() {
+            *word = self.read_otp_word(i as u8, delay)?;
+        }
+
+        let mut comp = CompensationData::default();
+
+        // Temperature offset and sensitivity (word 0x0D)
+        let temp_off_sens = otp[bmm350_otp::TEMP_OFF_SENS as usize];
+        comp.t_offs = sign_extend_8bit(temp_off_sens as u8) as f32 / 5.0;
+        comp.t_sens = sign_extend_8bit((temp_off_sens >> 8) as u8) as f32 / 512.0;
+
+        // Magnetic offsets (12-bit signed)
+        comp.offset_x = sign_extend_12bit(otp[bmm350_otp::MAG_OFFSET_X as usize] & 0x0FFF) as f32;
+        comp.offset_y = sign_extend_12bit(otp[bmm350_otp::MAG_OFFSET_Y as usize] & 0x0FFF) as f32;
+        comp.offset_z = sign_extend_12bit(otp[bmm350_otp::MAG_OFFSET_Z as usize] & 0x0FFF) as f32;
+
+        // Magnetic sensitivities (8-bit signed)
+        // sens_x is upper 8 bits of word 0x10
+        comp.sens_x =
+            sign_extend_8bit((otp[bmm350_otp::MAG_SENS_X as usize] >> 8) as u8) as f32 / 256.0;
+        // sens_y is lower 8 bits of word 0x11
+        comp.sens_y = sign_extend_8bit(otp[bmm350_otp::MAG_SENS_Y as usize] as u8) as f32 / 256.0
+            + SENS_CORR_Y;
+        // sens_z is upper 8 bits of word 0x11
+        comp.sens_z =
+            sign_extend_8bit((otp[bmm350_otp::MAG_SENS_Z as usize] >> 8) as u8) as f32 / 256.0;
+
+        // TCO (Temperature Coefficient of Offset) - 8-bit signed, divided by 32
+        comp.tco_x = sign_extend_8bit(otp[bmm350_otp::MAG_TCO_X as usize] as u8) as f32 / 32.0;
+        comp.tco_y = sign_extend_8bit(otp[bmm350_otp::MAG_TCO_Y as usize] as u8) as f32 / 32.0;
+        comp.tco_z = sign_extend_8bit(otp[bmm350_otp::MAG_TCO_Z as usize] as u8) as f32 / 32.0;
+
+        // TCS (Temperature Coefficient of Sensitivity) - 8-bit signed, divided by 16384
+        comp.tcs_x =
+            sign_extend_8bit((otp[bmm350_otp::MAG_TCS_X as usize] >> 8) as u8) as f32 / 16384.0;
+        comp.tcs_y =
+            sign_extend_8bit((otp[bmm350_otp::MAG_TCS_Y as usize] >> 8) as u8) as f32 / 16384.0;
+        comp.tcs_z = sign_extend_8bit((otp[bmm350_otp::MAG_TCS_Z as usize] >> 8) as u8) as f32
+            / 16384.0
+            - TCS_CORR_Z;
+
+        // Reference temperature DUT_T0 (16-bit signed)
+        comp.dut_t0 =
+            sign_extend_16bit(otp[bmm350_otp::MAG_DUT_T_0 as usize]) as f32 / 512.0 + 23.0;
+
+        // Cross-axis coupling (8-bit signed, divided by 800)
+        comp.cross_x_y = sign_extend_8bit(otp[bmm350_otp::CROSS_X_Y as usize] as u8) as f32 / 800.0;
+        comp.cross_y_x =
+            sign_extend_8bit((otp[bmm350_otp::CROSS_Y_X as usize] >> 8) as u8) as f32 / 800.0;
+        comp.cross_z_x = sign_extend_8bit(otp[bmm350_otp::CROSS_Z_X as usize] as u8) as f32 / 800.0;
+        comp.cross_z_y =
+            sign_extend_8bit((otp[bmm350_otp::CROSS_Z_Y as usize] >> 8) as u8) as f32 / 800.0;
+
+        defmt::debug!(
+            "BMM350 OTP: t_offs={} offset_x={} sens_x={} tco_x={} tcs_x={} dut_t0={}",
+            comp.t_offs,
+            comp.offset_x,
+            comp.sens_x,
+            comp.tco_x,
+            comp.tcs_x,
+            comp.dut_t0
+        );
+
+        Ok(comp)
     }
 
     /// Wait for PMU command to complete
@@ -81,12 +218,15 @@ where
         delay: &mut D,
     ) -> Result<Self, Error<E>> {
         let i2c = i2c.device_with_address::<BMM350_I2C_ADDR>();
-        let mag = Self { i2c };
+        let mut mag = Self {
+            i2c,
+            comp: CompensationData::default(),
+        };
 
         // Wait for BMM350 power-up (1ms from datasheet)
         delay.delay_ms(5);
 
-        // The BMM350 starts in suspend mode - do a soft reset to wake it up
+        // Soft reset to ensure clean state
         mag.write_reg(bmm350_reg::CMD, BMM350_SOFT_RESET)?;
         delay.delay_ms(30); // 24ms from datasheet
 
@@ -101,7 +241,10 @@ where
             return Err(Error::InvalidChipId(chip_id));
         }
 
-        // Power off OTP (auto-loaded on reset)
+        // Read OTP calibration data (auto-loaded after reset)
+        mag.comp = mag.read_otp_data(delay)?;
+
+        // Power off OTP after reading
         mag.write_reg(bmm350_reg::OTP_CMD_REG, 0x80)?;
         delay.delay_ms(5);
 
@@ -135,53 +278,110 @@ where
         delay.delay_ms(38);
         mag.wait_pmu_cmd(bmm350_pmu::NORMAL, delay)?;
 
-        defmt::info!("BMM350 initialized (chip_id={:#x})", chip_id);
+        defmt::info!(
+            "BMM350 initialized with OTP compensation (chip_id={:#x})",
+            chip_id
+        );
         Ok(mag)
     }
 
-    /// Read raw magnetometer data (21-bit signed values)
-    pub fn read_raw(&self) -> Result<MagDataRaw, Error<E>> {
-        let mut buf = [0u8; 9];
+    /// Read raw magnetometer and temperature data (24-bit signed two's complement)
+    pub fn read_raw(&self) -> Result<MagTempDataRaw, Error<E>> {
+        let mut buf = [0u8; 12];
         self.read_regs(bmm350_reg::MAG_X_XLSB, &mut buf)?;
 
-        // Each axis is 3 bytes (24-bit register), but only 21 bits are used
+        // Each axis is 3 bytes (24-bit two's complement)
+        // Sign extend from 24-bit to 32-bit: shift left 8, arithmetic shift right 8
         let raw_x = (buf[0] as u32) | ((buf[1] as u32) << 8) | ((buf[2] as u32) << 16);
         let raw_y = (buf[3] as u32) | ((buf[4] as u32) << 8) | ((buf[5] as u32) << 16);
         let raw_z = (buf[6] as u32) | ((buf[7] as u32) << 8) | ((buf[8] as u32) << 16);
+        let raw_t = (buf[9] as u32) | ((buf[10] as u32) << 8) | ((buf[11] as u32) << 16);
 
-        Ok(MagDataRaw {
-            x: sign_extend_21bit(raw_x),
-            y: sign_extend_21bit(raw_y),
-            z: sign_extend_21bit(raw_z),
+        Ok(MagTempDataRaw {
+            x: sign_extend_24bit(raw_x),
+            y: sign_extend_24bit(raw_y),
+            z: sign_extend_24bit(raw_z),
+            temp: sign_extend_24bit(raw_t),
         })
     }
 
-    /// Read magnetometer data in microtesla (µT)
+    /// Read compensated magnetometer data in microtesla (µT) and temperature in °C
     ///
-    /// Returns uncompensated magnetic field values. For best accuracy,
-    /// temperature compensation should be applied using OTP calibration data.
-    pub fn read(&self) -> Result<MagData, Error<E>> {
+    /// Applies the full Bosch compensation algorithm:
+    /// 1. Convert raw LSB to physical units
+    /// 2. Apply sensitivity and offset correction
+    /// 3. Apply temperature compensation (TCO and TCS)
+    /// 4. Apply cross-axis compensation
+    pub fn read(&self) -> Result<MagTempData, Error<E>> {
         let raw = self.read_raw()?;
-        Ok(MagData {
-            x: MagneticFluxDensity::new::<microtesla>(raw.x as f32 * LSB_TO_UT),
-            y: MagneticFluxDensity::new::<microtesla>(raw.y as f32 * LSB_TO_UT),
-            z: MagneticFluxDensity::new::<microtesla>(raw.z as f32 * LSB_TO_UT),
+
+        // Convert raw values to physical units
+        let mut x = raw.x as f32 * LSB_TO_UT_XY;
+        let mut y = raw.y as f32 * LSB_TO_UT_XY;
+        let mut z = raw.z as f32 * LSB_TO_UT_Z;
+        let temp = raw.temp as f32 * LSB_TO_DEGC;
+
+        // Apply temperature compensation
+        let temperature = (1.0 + self.comp.t_sens) * temp + self.comp.t_offs;
+        let temp_delta = temperature - self.comp.dut_t0;
+
+        // Apply sensitivity, offset, and temperature compensation for each axis
+        // Formula: value = ((value * (1 + sens) + offset + tco * dT) / (1 + tcs * dT))
+
+        // X-axis
+        x *= 1.0 + self.comp.sens_x;
+        x += self.comp.offset_x;
+        x += self.comp.tco_x * temp_delta;
+        x /= 1.0 + self.comp.tcs_x * temp_delta;
+
+        // Y-axis
+        y *= 1.0 + self.comp.sens_y;
+        y += self.comp.offset_y;
+        y += self.comp.tco_y * temp_delta;
+        y /= 1.0 + self.comp.tcs_y * temp_delta;
+
+        // Z-axis
+        z *= 1.0 + self.comp.sens_z;
+        z += self.comp.offset_z;
+        z += self.comp.tco_z * temp_delta;
+        z /= 1.0 + self.comp.tcs_z * temp_delta;
+
+        // Apply cross-axis compensation
+        let cross_denom = 1.0 - self.comp.cross_y_x * self.comp.cross_x_y;
+        let x_comp = (x - self.comp.cross_x_y * y) / cross_denom;
+        let y_comp = (y - self.comp.cross_y_x * x) / cross_denom;
+        let z_comp = z
+            + (x * (self.comp.cross_y_x * self.comp.cross_z_y - self.comp.cross_z_x)
+                - y * (self.comp.cross_z_y - self.comp.cross_x_y * self.comp.cross_z_x))
+                / cross_denom;
+
+        Ok(MagTempData {
+            x: MagneticFluxDensity::new::<microtesla>(x_comp),
+            y: MagneticFluxDensity::new::<microtesla>(y_comp),
+            z: MagneticFluxDensity::new::<microtesla>(z_comp),
+            temperature,
         })
     }
 }
 
-/// Raw magnetometer data (21-bit signed values in LSB)
+/// Raw magnetometer and temperature data (21-bit signed mag values in LSB)
 #[derive(Debug, Clone, Copy, Default)]
-pub struct MagDataRaw {
+pub struct MagTempDataRaw {
     pub x: i32,
     pub y: i32,
     pub z: i32,
+    pub temp: i32,
 }
 
-/// Magnetometer data in physical units (microtesla)
+/// Compensated magnetometer data in physical units
 #[derive(Debug, Clone, Copy)]
-pub struct MagData {
+pub struct MagTempData {
     pub x: MagneticFluxDensity,
     pub y: MagneticFluxDensity,
     pub z: MagneticFluxDensity,
+    pub temperature: f32, // Degrees Celsius
 }
+
+// Keep backward compatibility aliases
+pub type MagDataRaw = MagTempDataRaw;
+pub type MagData = MagTempData;

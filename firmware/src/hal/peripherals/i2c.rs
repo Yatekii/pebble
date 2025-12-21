@@ -81,4 +81,8 @@ pub enum Error<E> {
     InvalidChipId(u8),
     /// Initialization timeout
     InitTimeout,
+    /// OTP read error
+    OtpError,
+    /// Operation timeout
+    Timeout,
 }

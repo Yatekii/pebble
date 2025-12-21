@@ -42,10 +42,36 @@ pub mod bmm350_reg {
     pub const PMU_CMD_AXIS_EN: u8 = 0x05;
     pub const PMU_CMD: u8 = 0x06;
     pub const PMU_CMD_STATUS_0: u8 = 0x07;
-    // Magnetic data registers (24-bit per axis, little-endian)
+    // Magnetic data registers (24-bit per axis, little-endian) + temperature
     pub const MAG_X_XLSB: u8 = 0x31;
+    // OTP registers
     pub const OTP_CMD_REG: u8 = 0x50;
+    pub const OTP_DATA_MSB: u8 = 0x52;
+    pub const OTP_DATA_LSB: u8 = 0x53;
+    pub const OTP_STATUS: u8 = 0x55;
     pub const CMD: u8 = 0x7E;
+}
+
+/// BMM350 OTP word indices for compensation data
+pub mod bmm350_otp {
+    pub const TEMP_OFF_SENS: u8 = 0x0D;
+    pub const MAG_OFFSET_X: u8 = 0x0E;
+    pub const MAG_OFFSET_Y: u8 = 0x0F;
+    pub const MAG_OFFSET_Z: u8 = 0x10;
+    pub const MAG_SENS_X: u8 = 0x10;
+    pub const MAG_SENS_Y: u8 = 0x11;
+    pub const MAG_SENS_Z: u8 = 0x11;
+    pub const MAG_TCO_X: u8 = 0x12;
+    pub const MAG_TCO_Y: u8 = 0x13;
+    pub const MAG_TCO_Z: u8 = 0x14;
+    pub const MAG_TCS_X: u8 = 0x12;
+    pub const MAG_TCS_Y: u8 = 0x13;
+    pub const MAG_TCS_Z: u8 = 0x14;
+    pub const MAG_DUT_T_0: u8 = 0x18;
+    pub const CROSS_X_Y: u8 = 0x15;
+    pub const CROSS_Y_X: u8 = 0x15;
+    pub const CROSS_Z_X: u8 = 0x16;
+    pub const CROSS_Z_Y: u8 = 0x16;
 }
 
 /// BMM350 PMU command values
