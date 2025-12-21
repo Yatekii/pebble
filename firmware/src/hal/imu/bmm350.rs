@@ -18,16 +18,45 @@ use crate::hal::imu::constants::{
 use crate::hal::peripherals::i2c::{Error, SharedI2c, SharedI2cDevice};
 use crate::util::{sign_extend_8bit, sign_extend_12bit, sign_extend_16bit, sign_extend_24bit};
 
-// LSB to physical unit conversion factors from Bosch API
-// Base: 1,000,000 / 1,048,576 (24-bit to µT base)
-// With sensitivity and gain factors applied
-const LSB_TO_UT_XY: f32 = (1_000_000.0 / 1_048_576.0) / (14.55 * 19.46 * 0.6667 * 0.7146);
-const LSB_TO_UT_Z: f32 = (1_000_000.0 / 1_048_576.0) / (9.0 * 31.0 * 0.6667 * 0.7146);
-const LSB_TO_DEGC: f32 = 1.0 / (0.00204 * 0.6667 * 0.7146 * 1_048_576.0);
+/// LSB to physical unit conversion factors.
+///
+/// These factors convert raw 24-bit ADC values to physical units (µT and °C).
+/// The conversion chain is: ADC -> INA (instrumentation amp) -> LUT -> output.
+///
+/// Constants derived from the Bosch BMM350 Sensor API:
+/// <https://github.com/boschsensortec/BMM350_SensorAPI>
+mod conversion {
+    /// Base scaling factor (2^20 to µT).
+    pub const POWER: f32 = 1_000_000.0 / 1_048_576.0;
+    /// X/Y axis magnetic sensitivity.
+    pub const BXY_SENS: f32 = 14.55;
+    /// Z axis magnetic sensitivity.
+    pub const BZ_SENS: f32 = 9.0;
+    /// Instrumentation amplifier gain for X/Y.
+    pub const INA_XY_GAIN: f32 = 19.46;
+    /// Instrumentation amplifier gain for Z.
+    pub const INA_Z_GAIN: f32 = 31.0;
+    /// ADC gain (~0.667).
+    pub const ADC_GAIN: f32 = 1.0 / 1.5;
+    /// Lookup table correction gain.
+    pub const LUT_GAIN: f32 = 0.714607238769531;
+    /// Temperature sensitivity.
+    pub const TEMP_SENS: f32 = 0.00204;
 
-// Correction constants from Bosch API
-const SENS_CORR_Y: f32 = 0.01;
-const TCS_CORR_Z: f32 = 0.0001;
+    /// LSB to microtesla conversion factor for X/Y axes.
+    pub const LSB_TO_UT_XY: f32 = POWER / (BXY_SENS * INA_XY_GAIN * ADC_GAIN * LUT_GAIN);
+    /// LSB to microtesla conversion factor for Z axis.
+    pub const LSB_TO_UT_Z: f32 = POWER / (BZ_SENS * INA_Z_GAIN * ADC_GAIN * LUT_GAIN);
+    /// LSB to degrees Celsius conversion factor.
+    pub const LSB_TO_DEGC: f32 = 1.0 / (TEMP_SENS * ADC_GAIN * LUT_GAIN * 1_048_576.0);
+
+    /// Y-axis sensitivity correction.
+    pub const SENS_CORR_Y: f32 = 0.01;
+    /// Z-axis TCS correction.
+    pub const TCS_CORR_Z: f32 = 0.0001;
+}
+
+use conversion::*;
 
 /// OTP calibration data for compensation
 #[derive(Debug, Clone, Default)]
