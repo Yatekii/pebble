@@ -463,7 +463,13 @@ impl Render for ImuViewerApp {
 }
 
 pub fn run_app() {
-    let http_client = crate::http::IsahcHttpClient::new();
+    let http_client = match crate::http::IsahcHttpClient::new() {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("Failed to create HTTP client: {e}");
+            return;
+        }
+    };
     let app = Application::new()
         .with_assets(Assets)
         .with_http_client(http_client);

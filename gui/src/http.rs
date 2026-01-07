@@ -12,13 +12,12 @@ pub struct IsahcHttpClient {
 }
 
 impl IsahcHttpClient {
-    pub fn new() -> Arc<Self> {
+    pub fn new() -> Result<Arc<Self>, isahc::Error> {
         let client = isahc::HttpClient::builder()
             .default_headers(&[("User-Agent", "PebbleGUI/1.0")])
-            .build()
-            .expect("Failed to create HTTP client");
+            .build()?;
 
-        Arc::new(Self { client })
+        Ok(Arc::new(Self { client }))
     }
 }
 

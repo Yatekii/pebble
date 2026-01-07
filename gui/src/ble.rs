@@ -126,7 +126,15 @@ pub fn start_ble_client(state: Arc<Mutex<BleState>>) -> mpsc::Receiver<BleMessag
     let (tx, rx) = mpsc::channel();
 
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = tx.send(BleMessage::StateChanged(ConnectionState::Error(format!(
+                    "Failed to create tokio runtime: {e}"
+                ))));
+                return;
+            }
+        };
         rt.block_on(async move {
             if let Err(e) = run_ble_client(tx.clone(), state).await {
                 let _ = tx.send(BleMessage::StateChanged(ConnectionState::Error(
