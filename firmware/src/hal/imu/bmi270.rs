@@ -136,19 +136,6 @@ where
             gyr_z: i16::from_le_bytes([buf[10], buf[11]]),
         })
     }
-
-    /// Scan the I2C bus for devices
-    pub fn scan_i2c_bus(&self) {
-        defmt::info!("Scanning I2C bus for devices...");
-        let mut found = 0;
-        for addr in 0x03..=0x77 {
-            if self.i2c.write(&[]).is_ok() {
-                defmt::info!("Found device at address {:#x}", addr);
-                found += 1;
-            }
-        }
-        defmt::info!("I2C scan complete - found {} devices", found);
-    }
 }
 
 /// Accelerometer and gyroscope data
