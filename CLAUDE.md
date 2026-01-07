@@ -112,3 +112,11 @@ cargo clippy
 cargo fmt --check      # Check formatting
 cargo fmt              # Apply formatting
 ```
+
+## Important Hardware Notes
+
+### Sensor Orientation
+Both sensors are mounted with their Z-axis pointing DOWN (rotated 180° around the X-axis from the world frame).
+
+- **BMI270 (accelerometer/gyroscope)**: Rotated 180° around X-axis + 90° CCW in XY plane. Uses `transform_bmi270()`.
+- **BMM350 (magnetometer)**: Rotated 180° around X-axis only. Uses `transform_bmm350()`.
