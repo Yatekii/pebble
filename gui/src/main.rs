@@ -2,6 +2,7 @@ mod app;
 mod ble;
 mod chart;
 mod data;
+mod device_status;
 mod http;
 mod map;
 mod mesh;

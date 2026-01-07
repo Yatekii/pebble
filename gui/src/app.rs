@@ -5,9 +5,13 @@ use gpui_component::{ActiveTheme, Root, TitleBar, h_flex, v_flex};
 use gpui_component_assets::Assets;
 use parking_lot::Mutex;
 
-use crate::ble::{BleMessage, BleState, ConnectionState, GpsReading, LedColors, start_ble_client};
+use crate::ble::{
+    BleMessage, BleState, ConnectionState, DeviceStatusData, GpsReading, LedColors,
+    start_ble_client,
+};
 use crate::chart::{MultiLineChart, Series};
 use crate::data::{AhrsReading, ImuReading};
+use crate::device_status::DeviceStatusPanel;
 use crate::map::{GpsPosition, MapViewElement};
 use crate::mesh::Mesh3D;
 use crate::orientation::{Orientation, OrientationView};
@@ -30,6 +34,7 @@ pub struct ImuViewerApp {
     led_colors: LedColors,
     gps_reading: GpsReading,
     pcb_mesh: Option<Arc<Mesh3D>>,
+    device_status: Option<DeviceStatusData>,
 }
 
 impl ImuViewerApp {
@@ -99,6 +104,7 @@ impl ImuViewerApp {
             led_colors: [[0; 3]; 72],
             gps_reading: GpsReading::default(),
             pcb_mesh,
+            device_status: None,
         }
     }
 
@@ -141,6 +147,9 @@ impl ImuViewerApp {
                         self.led_colors[start + i] = *color;
                     }
                 }
+            }
+            BleMessage::DeviceStatus(status) => {
+                self.device_status = Some(status);
             }
         }
     }
@@ -378,12 +387,21 @@ impl Render for ImuViewerApp {
                                 self.gps_reading.has_fix,
                             ))),
                     )
-                    // Puzzle list on the right
+                    // Device status and puzzle list on the right
                     .child(
                         div()
                             .w(px(250.0))
                             .h_full()
-                            .child(PuzzleListView::new(sample_puzzles())),
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(DeviceStatusPanel::new(self.device_status))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(PuzzleListView::new(sample_puzzles())),
+                            ),
                     )
                     .into_any_element()
             } else {

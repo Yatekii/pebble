@@ -57,6 +57,11 @@ const GPS_DATA_UUID: Uuid = Uuid::from_bytes([
     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfa,
 ]);
 
+/// UUID for device status characteristic (16 bytes: status/error pairs for each peripheral)
+const DEVICE_STATUS_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfb,
+]);
+
 /// BLE connection state
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectionState {
@@ -93,6 +98,92 @@ pub struct GpsReading {
     pub has_fix: bool,
 }
 
+/// Device peripheral status
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PeripheralStatusData {
+    /// 0 = NotInitialized, 1 = Ok, 2 = Error
+    pub status: u8,
+    /// Error code (0 = None, 1 = InitFailed, 2 = I2cError, etc.)
+    pub error: u8,
+}
+
+impl PeripheralStatusData {
+    pub fn status_text(&self) -> &'static str {
+        match self.status {
+            0 => "Not Initialized",
+            1 => "OK",
+            2 => "Error",
+            _ => "Unknown",
+        }
+    }
+
+    pub fn error_text(&self) -> Option<&'static str> {
+        if self.status != 2 {
+            return None;
+        }
+        Some(match self.error {
+            1 => "Init Failed",
+            2 => "I2C Error",
+            3 => "UART Error",
+            4 => "Timer Error",
+            5 => "Channel Error",
+            6 => "Chip ID Mismatch",
+            7 => "Timeout",
+            8 => "OTP Error",
+            _ => "Unknown Error",
+        })
+    }
+
+    pub fn is_ok(&self) -> bool {
+        self.status == 1
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.status == 2
+    }
+}
+
+/// Device status for all peripherals
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DeviceStatusData {
+    pub leds: PeripheralStatusData,
+    pub gps: PeripheralStatusData,
+    pub servo: PeripheralStatusData,
+    pub imu: PeripheralStatusData,
+    pub magnetometer: PeripheralStatusData,
+}
+
+impl DeviceStatusData {
+    /// Parse from 16-byte BLE data
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < 10 {
+            return None;
+        }
+        Some(Self {
+            leds: PeripheralStatusData {
+                status: data[0],
+                error: data[1],
+            },
+            gps: PeripheralStatusData {
+                status: data[2],
+                error: data[3],
+            },
+            servo: PeripheralStatusData {
+                status: data[4],
+                error: data[5],
+            },
+            imu: PeripheralStatusData {
+                status: data[6],
+                error: data[7],
+            },
+            magnetometer: PeripheralStatusData {
+                status: data[8],
+                error: data[9],
+            },
+        })
+    }
+}
+
 /// Message sent from BLE task to the UI
 pub enum BleMessage {
     StateChanged(ConnectionState),
@@ -103,6 +194,8 @@ pub enum BleMessage {
     GpsData(GpsReading),
     /// LED colors update: chunk index (0, 1, or 2) and 24 LED colors
     LedColorsChunk(u8, [LedColor; 24]),
+    /// Device status update
+    DeviceStatus(DeviceStatusData),
 }
 
 /// Shared state between BLE task and UI
@@ -264,6 +357,9 @@ async fn run_ble_client(
         let led0_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_0_UUID);
         let led1_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_1_UUID);
         let led2_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_2_UUID);
+        let status_char = characteristics
+            .iter()
+            .find(|c| c.uuid == DEVICE_STATUS_UUID);
 
         // Subscribe to notifications
         if let Some(acc_char) = acc_char {
@@ -346,8 +442,39 @@ async fn run_ble_client(
             eprintln!("LED2 characteristic not found!");
         }
 
+        if let Some(status_char) = status_char {
+            eprintln!("Subscribing to DeviceStatus characteristic...");
+            match device.subscribe(status_char).await {
+                Ok(_) => eprintln!("  Subscribed to DeviceStatus notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to DeviceStatus: {:?}", e),
+            }
+        } else {
+            eprintln!("DeviceStatus characteristic not found!");
+        }
+
         // Read LED colors once on connect to get initial state
         read_led_colors(&device, led0_char, led1_char, led2_char, &tx).await;
+
+        // Read device status once on connect
+        if let Some(status_char) = status_char {
+            match device.read(status_char).await {
+                Ok(data) => {
+                    eprintln!("DeviceStatus read: {} bytes", data.len());
+                    if let Some(status) = DeviceStatusData::from_bytes(&data) {
+                        eprintln!(
+                            "  LEDs={}, GPS={}, Servo={}, IMU={}, Mag={}",
+                            status.leds.status_text(),
+                            status.gps.status_text(),
+                            status.servo.status_text(),
+                            status.imu.status_text(),
+                            status.magnetometer.status_text()
+                        );
+                        let _ = tx.send(BleMessage::DeviceStatus(status));
+                    }
+                }
+                Err(e) => eprintln!("DeviceStatus read error: {:?}", e),
+            }
+        }
 
         // Listen for notifications
         eprintln!("Waiting for notifications...");
@@ -481,6 +608,18 @@ async fn run_ble_client(
                 }
                 if let Some(colors) = parse_led_colors(&notification.value) {
                     let _ = tx.send(BleMessage::LedColorsChunk(2, colors));
+                }
+            } else if notification.uuid == DEVICE_STATUS_UUID && notification.value.len() >= 10 {
+                if let Some(status) = DeviceStatusData::from_bytes(&notification.value) {
+                    eprintln!(
+                        "DeviceStatus notification: LEDs={}, GPS={}, Servo={}, IMU={}, Mag={}",
+                        status.leds.status_text(),
+                        status.gps.status_text(),
+                        status.servo.status_text(),
+                        status.imu.status_text(),
+                        status.magnetometer.status_text()
+                    );
+                    let _ = tx.send(BleMessage::DeviceStatus(status));
                 }
             }
         }
