@@ -4,9 +4,20 @@ use uom::si::{
     f32::{Acceleration, AngularVelocity},
 };
 
-/// Rotate coordinates 90° CCW to compensate for BMI270 PCB orientation.
-pub fn rotate_90ccw(v: Vector3<f32>) -> Vector3<f32> {
-    Vector3::new(v.y, -v.x, v.z)
+/// Transform BMI270 coordinates to world frame.
+/// BMI270 is rotated 90° CCW on PCB and rotated 180° around X-axis (Z points down).
+/// 180° rotation around X-axis: (x, y, z) -> (x, -y, -z)
+/// Then 90° CCW in XY plane: (x, y, z) -> (y, -x, z)
+/// Combined: (x, y, z) -> (-y, -x, -z)
+pub fn transform_bmi270(v: Vector3<f32>) -> Vector3<f32> {
+    Vector3::new(-v.y, -v.x, -v.z)
+}
+
+/// Transform BMM350 coordinates to world frame.
+/// BMM350 is rotated 180° around X-axis (Z points down, not rotated in XY plane).
+/// 180° rotation around X-axis: (x, y, z) -> (x, -y, -z)
+pub fn transform_bmm350(v: Vector3<f32>) -> Vector3<f32> {
+    Vector3::new(v.x, -v.y, -v.z)
 }
 
 /// Correct accelerometer for sensor offset from center of rotation.

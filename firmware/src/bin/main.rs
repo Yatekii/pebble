@@ -12,6 +12,7 @@ use core::sync::atomic::Ordering;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use embedded_hal::delay::DelayNs;
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::timer::timg::TimerGroup;
@@ -75,18 +76,18 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    // Set initial LED state: all green at 50% brightness
-    leds.set_brightness(128);
+    // Set initial LED state: all green at 2% brightness
+    leds.set_brightness(5);
     leds.set_all(led::Color::green());
     if let Err(_e) = leds.show() {
         info!("Failed to update LEDs");
     } else {
-        info!("LEDs initialized: all green at 50% brightness");
+        info!("LEDs initialized: all green at 2% brightness");
     }
 
     // Send initial LED command state
     LED_COMMAND.sender().send(LedCommand {
-        brightness: 128,
+        brightness: 5,
         led_index: 0xFF,
         r: 0,
         g: 255,
@@ -116,16 +117,27 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    // Initialize magnetometer directly on shared I2C bus
-    let magnetometer = match imu::bmm350::SharedBmm350::new(shared_i2c, &mut delay) {
-        Ok(magnetometer) => {
-            info!("Magnetometer initialized successfully");
-            Some(magnetometer)
+    // Initialize magnetometer directly on shared I2C bus (with retries)
+    let magnetometer = {
+        let mut result = None;
+        for attempt in 1..=5 {
+            match imu::bmm350::SharedBmm350::new(shared_i2c, &mut delay) {
+                Ok(magnetometer) => {
+                    info!("Magnetometer initialized successfully");
+                    result = Some(magnetometer);
+                    break;
+                }
+                Err(error) => {
+                    info!(
+                        "Failed to initialize magnetometer (attempt {}): {:?}",
+                        attempt, error
+                    );
+                    // Wait before retry
+                    delay.delay_ms(100);
+                }
+            }
         }
-        Err(error) => {
-            info!("Failed to initialize magnetometer: {:?}", error);
-            None
-        }
+        result
     };
 
     // Initialize GPS on UART1 (GPIO8=RX, GPIO18=TX)

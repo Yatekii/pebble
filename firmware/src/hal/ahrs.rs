@@ -9,8 +9,8 @@ use uom::si::f32::{Acceleration, AngularVelocity, MagneticFluxDensity};
 
 use crate::math::quaternion_to_euler;
 
-/// Sample period in seconds (assuming 10Hz IMU update rate)
-const SAMPLE_PERIOD: f32 = 0.1;
+/// Sample period in seconds (50Hz IMU update rate)
+const SAMPLE_PERIOD: f32 = 0.02;
 
 /// Madgwick filter gain parameter
 /// Higher values = faster convergence but more noise

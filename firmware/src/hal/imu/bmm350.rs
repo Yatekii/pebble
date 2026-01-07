@@ -126,19 +126,23 @@ where
         addr: u8,
         delay: &mut D,
     ) -> Result<u16, Error<E>> {
-        // Set OTP command: read word at address
+        // Set OTP command: read word at address (0x20 = DIR_READ)
         self.write_reg(bmm350_reg::OTP_CMD_REG, 0x20 | (addr & 0x1F))?;
 
         // Wait for OTP read to complete
-        for _ in 0..20 {
-            delay.delay_ms(1);
+        // Per Bosch API: poll every 300us, check for CMD_DONE (bit 0 = 1)
+        for _ in 0..100 {
+            delay.delay_us(300);
             let status = self.read_reg(bmm350_reg::OTP_STATUS)?;
-            // Check for errors (bits 5-1) and completion (bit 0 = 0)
-            if status & 0x3E != 0 {
+
+            // Check for errors first (bits 7-5, mask 0xE0)
+            if status & 0xE0 != 0 {
                 defmt::warn!("OTP read error: status={:#x}", status);
                 return Err(Error::OtpError);
             }
-            if status & 0x01 == 0 {
+
+            // Bit 0 = 1 means command done (not busy!)
+            if status & 0x01 != 0 {
                 // Read complete, get data
                 let msb = self.read_reg(bmm350_reg::OTP_DATA_MSB)?;
                 let lsb = self.read_reg(bmm350_reg::OTP_DATA_LSB)?;
