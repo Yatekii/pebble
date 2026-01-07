@@ -8,7 +8,8 @@ use uom::si::f32::MagneticFluxDensity;
 use uom::si::magnetic_flux_density::microtesla;
 
 use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
-use crate::hal::ahrs::AhrsFilter;
+use crate::filter::ahrs::AhrsFilter;
+use crate::filter::heading::{MagCalibration, compute_heading};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::SharedBmm350;
 use crate::math::{correct_centripetal, transform_bmm350};
@@ -19,65 +20,6 @@ const IMU_OFFSET: Vector3<f32> = Vector3::new(0.045, 0.0, 0.0);
 
 /// Sample period in milliseconds (50Hz = 20ms).
 const SAMPLE_PERIOD_MS: u64 = 20;
-
-/// Hard iron calibration state for magnetometer.
-struct MagCalibration {
-    x_min: f32,
-    x_max: f32,
-    y_min: f32,
-    y_max: f32,
-    z_min: f32,
-    z_max: f32,
-}
-
-impl MagCalibration {
-    fn new() -> Self {
-        Self {
-            x_min: f32::MAX,
-            x_max: f32::MIN,
-            y_min: f32::MAX,
-            y_max: f32::MIN,
-            z_min: f32::MAX,
-            z_max: f32::MIN,
-        }
-    }
-
-    fn update(&mut self, x: f32, y: f32, z: f32) {
-        if x < self.x_min {
-            self.x_min = x;
-        }
-        if x > self.x_max {
-            self.x_max = x;
-        }
-        if y < self.y_min {
-            self.y_min = y;
-        }
-        if y > self.y_max {
-            self.y_max = y;
-        }
-        if z < self.z_min {
-            self.z_min = z;
-        }
-        if z > self.z_max {
-            self.z_max = z;
-        }
-    }
-
-    fn apply(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32) {
-        let x_offset = (self.x_min + self.x_max) / 2.0;
-        let y_offset = (self.y_min + self.y_max) / 2.0;
-        let z_offset = (self.z_min + self.z_max) / 2.0;
-
-        (x - x_offset, y - y_offset, z - z_offset)
-    }
-
-    fn offsets(&self) -> (f32, f32) {
-        (
-            (self.x_min + self.x_max) / 2.0,
-            (self.y_min + self.y_max) / 2.0,
-        )
-    }
-}
 
 /// Run the IMU task.
 ///
@@ -153,12 +95,9 @@ where
             ahrs.update_marg(acceleration, angular_velocity_corrected, mag_calibrated);
 
         // Use AHRS yaw as compass heading (tilt-compensated and filtered)
-        let mut heading = orientation.yaw;
-        if heading < 0.0 {
-            heading += 360.0;
-        }
+        let heading = compute_heading(&orientation);
 
-        COMPASS_HEADING.sender().send(heading as u16);
+        COMPASS_HEADING.sender().send(heading);
 
         // Log periodically (every 50 samples = 1 second at 50Hz)
         sample_count += 1;
@@ -166,7 +105,7 @@ where
             let (x_off, y_off) = mag_cal.offsets();
             info!(
                 "AHRS: yaw/heading={} roll={} pitch={} (mag_cal: x_off={} y_off={})",
-                heading as i32,
+                heading,
                 orientation.roll as i32,
                 orientation.pitch as i32,
                 x_off as i32,
