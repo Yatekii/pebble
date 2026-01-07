@@ -20,7 +20,10 @@
 //!    - Compass heading calculation
 //!    - Unified device state
 //!
-//! 3. **Control Layer** (planned): Puzzle logic and game state machine
+//! 3. **Control Layer** ([`puzzle`]): Puzzle logic and game state machine
+//!    - State machine for puzzle progression
+//!    - Individual puzzle implementations
+//!    - Event/action system for layer communication
 //!
 //! 4. **Communications Layer** ([`comms`]): External connectivity
 //!    - BLE GATT server for sensor data and control
@@ -41,6 +44,7 @@ pub mod filter;
 pub mod hal;
 pub mod math;
 mod nvs_stubs;
+pub mod puzzle;
 pub mod state;
 pub mod tasks;
 pub mod util;
