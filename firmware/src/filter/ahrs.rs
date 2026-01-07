@@ -43,9 +43,22 @@ pub struct Orientation {
     /// Pitch angle in degrees (-90 to 90).
     /// Rotation around the lateral axis.
     pub pitch: f32,
-    /// Yaw angle in degrees (0 to 360).
-    /// Rotation around the vertical axis (heading).
+    /// Yaw angle in degrees (-180 to 180).
+    /// Rotation around the vertical axis.
     pub yaw: f32,
+}
+
+impl Orientation {
+    /// Get the compass heading in degrees (0-359).
+    ///
+    /// This normalizes the yaw angle to the 0-360 range where 0 is North.
+    pub fn heading(&self) -> u16 {
+        let mut heading = self.yaw;
+        if heading < 0.0 {
+            heading += 360.0;
+        }
+        heading as u16
+    }
 }
 
 /// AHRS filter wrapper using Madgwick algorithm.
@@ -116,5 +129,147 @@ impl AhrsFilter {
 impl Default for AhrsFilter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Hard iron calibration state for magnetometer.
+///
+/// Tracks min/max values on each axis to compute hard iron offsets.
+/// Hard iron distortion is caused by permanent magnets or magnetized
+/// materials near the sensor.
+pub struct MagCalibration {
+    x_min: f32,
+    x_max: f32,
+    y_min: f32,
+    y_max: f32,
+    z_min: f32,
+    z_max: f32,
+}
+
+impl MagCalibration {
+    /// Create a new calibration state with no data.
+    pub fn new() -> Self {
+        Self {
+            x_min: f32::MAX,
+            x_max: f32::MIN,
+            y_min: f32::MAX,
+            y_max: f32::MIN,
+            z_min: f32::MAX,
+            z_max: f32::MIN,
+        }
+    }
+
+    /// Update calibration with a new magnetometer reading.
+    ///
+    /// Call this with every magnetometer reading to build up
+    /// calibration data. For best results, rotate the device
+    /// through all orientations.
+    pub fn update(&mut self, x: f32, y: f32, z: f32) {
+        if x < self.x_min {
+            self.x_min = x;
+        }
+        if x > self.x_max {
+            self.x_max = x;
+        }
+        if y < self.y_min {
+            self.y_min = y;
+        }
+        if y > self.y_max {
+            self.y_max = y;
+        }
+        if z < self.z_min {
+            self.z_min = z;
+        }
+        if z > self.z_max {
+            self.z_max = z;
+        }
+    }
+
+    /// Apply hard iron calibration to a magnetometer reading.
+    ///
+    /// Subtracts the computed offsets from each axis to center
+    /// the readings around zero.
+    ///
+    /// # Returns
+    ///
+    /// Calibrated (x, y, z) values.
+    pub fn apply(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+        let x_offset = (self.x_min + self.x_max) / 2.0;
+        let y_offset = (self.y_min + self.y_max) / 2.0;
+        let z_offset = (self.z_min + self.z_max) / 2.0;
+
+        (x - x_offset, y - y_offset, z - z_offset)
+    }
+
+    /// Get the current X and Y axis offsets for logging.
+    pub fn offsets(&self) -> (f32, f32) {
+        (
+            (self.x_min + self.x_max) / 2.0,
+            (self.y_min + self.y_max) / 2.0,
+        )
+    }
+}
+
+impl Default for MagCalibration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_heading_positive() {
+        let orientation = Orientation {
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: 45.0,
+        };
+        assert_eq!(orientation.heading(), 45);
+    }
+
+    #[test]
+    fn test_heading_negative() {
+        let orientation = Orientation {
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: -45.0,
+        };
+        assert_eq!(orientation.heading(), 315);
+    }
+
+    #[test]
+    fn test_heading_zero() {
+        let orientation = Orientation {
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: 0.0,
+        };
+        assert_eq!(orientation.heading(), 0);
+    }
+
+    #[test]
+    fn test_mag_calibration_update() {
+        let mut cal = MagCalibration::new();
+        cal.update(10.0, 20.0, 30.0);
+        cal.update(-10.0, -20.0, -30.0);
+
+        let (x_off, y_off) = cal.offsets();
+        assert_eq!(x_off, 0.0);
+        assert_eq!(y_off, 0.0);
+    }
+
+    #[test]
+    fn test_mag_calibration_apply() {
+        let mut cal = MagCalibration::new();
+        cal.update(100.0, 200.0, 300.0);
+        cal.update(-100.0, -200.0, -300.0);
+
+        let (x, y, z) = cal.apply(50.0, 100.0, 150.0);
+        assert_eq!(x, 50.0);
+        assert_eq!(y, 100.0);
+        assert_eq!(z, 150.0);
     }
 }

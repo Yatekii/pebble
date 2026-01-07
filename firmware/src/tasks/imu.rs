@@ -8,8 +8,7 @@ use uom::si::f32::MagneticFluxDensity;
 use uom::si::magnetic_flux_density::microtesla;
 
 use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
-use crate::filter::ahrs::AhrsFilter;
-use crate::filter::heading::{MagCalibration, compute_heading};
+use crate::filter::ahrs::{AhrsFilter, MagCalibration};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::SharedBmm350;
 use crate::math::{correct_centripetal, transform_bmm350};
@@ -95,7 +94,7 @@ where
             ahrs.update_marg(acceleration, angular_velocity_corrected, mag_calibrated);
 
         // Use AHRS yaw as compass heading (tilt-compensated and filtered)
-        let heading = compute_heading(&orientation);
+        let heading = orientation.heading();
 
         COMPASS_HEADING.sender().send(heading);
 
