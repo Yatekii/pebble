@@ -74,4 +74,11 @@ impl ImuHistory {
     pub fn len(&self) -> usize {
         self.accel.len()
     }
+
+    pub fn clear(&mut self) {
+        self.accel.clear();
+        self.gyro.clear();
+        self.mag.clear();
+        self.ahrs.clear();
+    }
 }

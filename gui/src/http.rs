@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 use futures::io::AsyncReadExt;
-use gpui_http_client::{AsyncBody, HttpClient, Request, Response};
+use http_client::{AsyncBody, HttpClient, Request, Response};
 
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ impl HttpClient for IsahcHttpClient {
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-            let mut builder = gpui_http_client::http::Response::builder().status(status.as_u16());
+            let mut builder = http_client::http::Response::builder().status(status.as_u16());
             for (key, value) in headers.iter() {
                 builder = builder.header(key.as_str(), value.to_str().unwrap_or(""));
             }
@@ -69,15 +69,11 @@ impl HttpClient for IsahcHttpClient {
         })
     }
 
-    fn user_agent(&self) -> Option<&gpui_http_client::http::HeaderValue> {
+    fn user_agent(&self) -> Option<&http_client::http::HeaderValue> {
         None
     }
 
-    fn proxy(&self) -> Option<&gpui_http_client::Url> {
+    fn proxy(&self) -> Option<&http_client::Url> {
         None
-    }
-
-    fn type_name(&self) -> &'static str {
-        "IsahcHttpClient"
     }
 }

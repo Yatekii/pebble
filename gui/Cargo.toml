@@ -5,12 +5,13 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+gltf = "1.4"
 btleplug = "0.11"
 futures = "0.3"
-gpui = "0.2.2"
-gpui-component = { path = "../../gpui-component/crates/ui" }
-gpui-component-assets = { path = "../../gpui-component/crates/assets" }
-gpui_http_client = "0.2.2"
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", package = "gpui-component" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", package = "gpui-component-assets" }
+http_client = { git = "https://github.com/zed-industries/zed", package = "http_client" }
 isahc = { version = "1.7", features = ["http2"] }
 parking_lot = "0.12"
 rand = "0.8"

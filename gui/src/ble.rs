@@ -143,14 +143,22 @@ async fn run_ble_client(
     tx: mpsc::Sender<BleMessage>,
     state: Arc<Mutex<BleState>>,
 ) -> anyhow::Result<()> {
-    let manager = Manager::new().await?;
-    let adapters = manager.adapters().await?;
-    let central = adapters
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("No Bluetooth adapters found"))?;
+    // Track the last connected device ID to detect stale peripherals
+    let mut last_device_id: Option<String> = None;
 
     loop {
+        // Re-create the manager and adapter on each connection attempt.
+        // This is a workaround for a btleplug bug on macOS where peripheral objects
+        // become stale after disconnect - their notification streams stop working.
+        // By recreating the manager, we ensure we get fresh peripheral instances.
+        // See: https://github.com/deviceplug/btleplug/issues/413
+        let manager = Manager::new().await?;
+        let adapters = manager.adapters().await?;
+        let central = adapters
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No Bluetooth adapters found"))?;
+
         // Start scanning
         eprintln!("Starting BLE scan...");
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Scanning));
@@ -161,7 +169,7 @@ async fn run_ble_client(
         central.start_scan(ScanFilter::default()).await?;
 
         // Wait for device discovery
-        let device = find_pebble_device(&central).await;
+        let device = find_pebble_device(&central, last_device_id.as_deref()).await;
 
         let _ = central.stop_scan().await;
 
@@ -170,29 +178,65 @@ async fn run_ble_client(
             continue;
         };
 
+        // Store the device ID for next iteration
+        last_device_id = Some(device.id().to_string());
+
         // Connect to device
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Connecting));
         state.lock().connection_state = ConnectionState::Connecting;
 
-        if device.connect().await.is_err() {
-            let _ = tx.send(BleMessage::StateChanged(ConnectionState::Error(
-                "Failed to connect".into(),
-            )));
+        if let Err(e) = device.connect().await {
+            eprintln!("Failed to connect: {:?}", e);
+            let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
+            state.lock().connection_state = ConnectionState::Disconnected;
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
 
+        // Verify connection is actually established
+        match device.is_connected().await {
+            Ok(true) => eprintln!("Connection verified"),
+            Ok(false) => {
+                eprintln!("Device reports not connected after connect() succeeded");
+                let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
+                state.lock().connection_state = ConnectionState::Disconnected;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(e) => {
+                eprintln!("Failed to verify connection: {:?}", e);
+                let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
+                state.lock().connection_state = ConnectionState::Disconnected;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        }
+
         // Discover services
-        if device.discover_services().await.is_err() {
+        if let Err(e) = device.discover_services().await {
+            eprintln!("Failed to discover services: {:?}", e);
             let _ = device.disconnect().await;
+            let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
+            state.lock().connection_state = ConnectionState::Disconnected;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+
+        // Check we actually found characteristics before declaring connected
+        let characteristics = device.characteristics();
+        if characteristics.is_empty() {
+            eprintln!("No characteristics found, connection may be stale");
+            let _ = device.disconnect().await;
+            let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
+            state.lock().connection_state = ConnectionState::Disconnected;
+            tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
 
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Connected));
         state.lock().connection_state = ConnectionState::Connected;
 
-        // Find our characteristics
-        let characteristics = device.characteristics();
+        // Log characteristics
         eprintln!("Found {} characteristics:", characteristics.len());
         for c in &characteristics {
             eprintln!("  - {} (props: {:?})", c.uuid, c.properties);
@@ -302,12 +346,13 @@ async fn run_ble_client(
         let mut notification_stream = device.notifications().await?;
         let mut notification_count = 0u64;
         let mut last_data_time = std::time::Instant::now();
-        let max_silence = Duration::from_secs(5); // Force reconnect if no data for 5 seconds
+        // Force reconnect if no data for 2 seconds - macOS is_connected() is unreliable
+        let max_silence = Duration::from_secs(2);
 
         loop {
-            // Check for timeout - if no notifications for 1 second, check connection
+            // Check for timeout - if no notifications for 500ms, check connection
             let timeout_result =
-                tokio::time::timeout(Duration::from_secs(1), notification_stream.next()).await;
+                tokio::time::timeout(Duration::from_millis(500), notification_stream.next()).await;
 
             let notification = match timeout_result {
                 Ok(Some(n)) => {
@@ -321,23 +366,12 @@ async fn run_ble_client(
                 Err(_) => {
                     // Timeout fired - check if we've been silent too long
                     let silence_duration = last_data_time.elapsed();
-                    eprintln!("Timeout fired, silence: {:?}", silence_duration);
                     if silence_duration > max_silence {
                         eprintln!("No data for {:?}, assuming disconnected", silence_duration);
                         break;
                     }
-                    // Also check is_connected as a secondary check
-                    match device.is_connected().await {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            eprintln!("Device disconnected (is_connected returned false)");
-                            break;
-                        }
-                        Err(e) => {
-                            eprintln!("is_connected error: {:?}, assuming disconnected", e);
-                            break;
-                        }
-                    }
+                    // Don't trust is_connected() on macOS - it often returns true for dead connections
+                    // Just continue waiting until max_silence is reached
                     continue;
                 }
             };
@@ -448,17 +482,21 @@ async fn run_ble_client(
             notification_count
         );
 
-        // Disconnect cleanly
-        eprintln!("Disconnecting device...");
-        match device.disconnect().await {
-            Ok(_) => eprintln!("Device disconnected successfully"),
-            Err(e) => eprintln!("Device disconnect error (expected): {:?}", e),
-        }
-
-        // Disconnected - will automatically reconnect
-        eprintln!("Connection lost, will reconnect in 1 second...");
+        // Update UI state immediately - don't wait for disconnect to complete
+        eprintln!("Connection lost, updating UI state...");
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
         state.lock().connection_state = ConnectionState::Disconnected;
+
+        // Try to disconnect cleanly, but with a timeout since it can hang on macOS
+        eprintln!("Disconnecting device...");
+        match tokio::time::timeout(Duration::from_secs(2), device.disconnect()).await {
+            Ok(Ok(_)) => eprintln!("Device disconnected successfully"),
+            Ok(Err(e)) => eprintln!("Device disconnect error (expected): {:?}", e),
+            Err(_) => eprintln!("Device disconnect timed out (ignoring)"),
+        }
+
+        // Will automatically reconnect
+        eprintln!("Will reconnect in 1 second...");
         tokio::time::sleep(Duration::from_secs(1)).await;
         eprintln!("Looping back to scan...");
     }
@@ -531,13 +569,17 @@ async fn read_led_colors(
     }
 }
 
-async fn find_pebble_device(central: &Adapter) -> Option<Peripheral> {
+async fn find_pebble_device(central: &Adapter, last_device_id: Option<&str>) -> Option<Peripheral> {
     // Wait a bit for scanning
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let peripherals = central.peripherals().await.ok()?;
 
-    eprintln!("Found {} BLE peripherals", peripherals.len());
+    eprintln!(
+        "Found {} BLE peripherals (last_device_id: {:?})",
+        peripherals.len(),
+        last_device_id
+    );
 
     for peripheral in &peripherals {
         let id = peripheral.id().to_string();

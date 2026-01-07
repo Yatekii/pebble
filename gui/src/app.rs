@@ -9,8 +9,12 @@ use crate::ble::{BleMessage, BleState, ConnectionState, GpsReading, LedColors, s
 use crate::chart::{MultiLineChart, Series};
 use crate::data::{AhrsReading, ImuReading};
 use crate::map::{GpsPosition, MapViewElement};
+use crate::mesh::Mesh3D;
 use crate::orientation::{Orientation, OrientationView};
 use crate::puzzles::{PuzzleListView, sample_puzzles};
+
+/// Embedded PCB 3D model.
+const PCB_MODEL_GLB: &[u8] = include_bytes!("../../hardware/pebble.glb");
 
 actions!(imu_viewer, [Quit]);
 
@@ -25,6 +29,7 @@ pub struct ImuViewerApp {
     connection_state: ConnectionState,
     led_colors: LedColors,
     gps_reading: GpsReading,
+    pcb_mesh: Option<Arc<Mesh3D>>,
 }
 
 impl ImuViewerApp {
@@ -76,7 +81,16 @@ impl ImuViewerApp {
         })
         .detach();
 
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
+
+        // Load the PCB 3D model
+        let pcb_mesh = match Mesh3D::from_glb(PCB_MODEL_GLB) {
+            Ok(mesh) => Some(Arc::new(mesh)),
+            Err(e) => {
+                eprintln!("Failed to load PCB model: {:?}", e);
+                None
+            }
+        };
 
         Self {
             focus_handle,
@@ -84,12 +98,20 @@ impl ImuViewerApp {
             connection_state: ConnectionState::Disconnected,
             led_colors: [[0; 3]; 72],
             gps_reading: GpsReading::default(),
+            pcb_mesh,
         }
     }
 
     fn handle_ble_message(&mut self, msg: BleMessage) {
         match msg {
             BleMessage::StateChanged(state) => {
+                eprintln!("UI: connection state changed to {:?}", state);
+                if matches!(
+                    state,
+                    ConnectionState::Disconnected | ConnectionState::Scanning
+                ) {
+                    self.ble_state.lock().imu_history.clear();
+                }
                 self.connection_state = state;
             }
             BleMessage::AccelData(accel) => {
@@ -342,12 +364,11 @@ impl Render for ImuViewerApp {
                             .w(px(400.0))
                             .h_full()
                             .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .child(OrientationView::new(orientation, led_colors)),
-                            )
+                            .child(div().flex_1().min_h_0().child(OrientationView::new(
+                                orientation,
+                                led_colors,
+                                self.pcb_mesh.clone(),
+                            )))
                             .child(div().flex_1().min_h_0().child(MapViewElement::new(
                                 GpsPosition {
                                     latitude: self.gps_reading.latitude as f64,
