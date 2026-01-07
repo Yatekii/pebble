@@ -109,3 +109,61 @@ impl Default for MagCalibration {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_heading_positive() {
+        let orientation = Orientation {
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: 45.0,
+        };
+        assert_eq!(compute_heading(&orientation), 45);
+    }
+
+    #[test]
+    fn test_compute_heading_negative() {
+        let orientation = Orientation {
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: -45.0,
+        };
+        assert_eq!(compute_heading(&orientation), 315);
+    }
+
+    #[test]
+    fn test_compute_heading_zero() {
+        let orientation = Orientation {
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: 0.0,
+        };
+        assert_eq!(compute_heading(&orientation), 0);
+    }
+
+    #[test]
+    fn test_mag_calibration_update() {
+        let mut cal = MagCalibration::new();
+        cal.update(10.0, 20.0, 30.0);
+        cal.update(-10.0, -20.0, -30.0);
+
+        let (x_off, y_off) = cal.offsets();
+        assert_eq!(x_off, 0.0);
+        assert_eq!(y_off, 0.0);
+    }
+
+    #[test]
+    fn test_mag_calibration_apply() {
+        let mut cal = MagCalibration::new();
+        cal.update(100.0, 200.0, 300.0);
+        cal.update(-100.0, -200.0, -300.0);
+
+        let (x, y, z) = cal.apply(50.0, 100.0, 150.0);
+        assert_eq!(x, 50.0);
+        assert_eq!(y, 100.0);
+        assert_eq!(z, 150.0);
+    }
+}

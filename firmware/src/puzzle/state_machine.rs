@@ -213,3 +213,73 @@ impl Default for PuzzleStateMachine {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_puzzle_id_next() {
+        assert_eq!(PuzzleId::CompassAlign.next(), Some(PuzzleId::LocationFind));
+        assert_eq!(PuzzleId::LocationFind.next(), Some(PuzzleId::TiltSequence));
+        assert_eq!(PuzzleId::TiltSequence.next(), Some(PuzzleId::Unlocked));
+        assert_eq!(PuzzleId::Unlocked.next(), None);
+    }
+
+    #[test]
+    fn test_puzzle_id_from_u8() {
+        assert_eq!(PuzzleId::from_u8(0), Some(PuzzleId::CompassAlign));
+        assert_eq!(PuzzleId::from_u8(1), Some(PuzzleId::LocationFind));
+        assert_eq!(PuzzleId::from_u8(2), Some(PuzzleId::TiltSequence));
+        assert_eq!(PuzzleId::from_u8(3), Some(PuzzleId::Unlocked));
+        assert_eq!(PuzzleId::from_u8(4), None);
+        assert_eq!(PuzzleId::from_u8(255), None);
+    }
+
+    #[test]
+    fn test_saved_progress_roundtrip() {
+        let mut progress = SavedProgress::default();
+        progress.current_puzzle = 2;
+        progress.puzzle_states[0].completed = true;
+        progress.puzzle_states[0].attempts = 5;
+        progress.puzzle_states[1].completed = true;
+        progress.puzzle_states[1].progress = 50;
+
+        let bytes = progress.to_bytes();
+        let restored = SavedProgress::from_bytes(&bytes);
+
+        assert_eq!(restored.current_puzzle, 2);
+        assert!(restored.puzzle_states[0].completed);
+        assert_eq!(restored.puzzle_states[0].attempts, 5);
+        assert!(restored.puzzle_states[1].completed);
+        assert_eq!(restored.puzzle_states[1].progress, 50);
+    }
+
+    #[test]
+    fn test_state_machine_new() {
+        let sm = PuzzleStateMachine::new();
+        assert_eq!(sm.current_puzzle(), PuzzleId::CompassAlign);
+        assert!(!sm.needs_save());
+    }
+
+    #[test]
+    fn test_state_machine_reset() {
+        let mut sm = PuzzleStateMachine::new();
+        sm.reset();
+        assert_eq!(sm.current_puzzle(), PuzzleId::CompassAlign);
+        assert!(sm.needs_save());
+    }
+
+    #[test]
+    fn test_state_machine_from_saved() {
+        let mut saved = SavedProgress::default();
+        saved.current_puzzle = 2;
+        saved.puzzle_states[0].completed = true;
+        saved.puzzle_states[1].completed = true;
+
+        let sm = PuzzleStateMachine::from_saved(saved);
+        assert_eq!(sm.current_puzzle(), PuzzleId::TiltSequence);
+        assert!(sm.puzzle_state(PuzzleId::CompassAlign).completed);
+        assert!(sm.puzzle_state(PuzzleId::LocationFind).completed);
+    }
+}
