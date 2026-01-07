@@ -69,30 +69,36 @@ async fn main(_spawner: Spawner) -> ! {
     let mut leds = match led::init(peripherals.RMT, peripherals.GPIO15, led_buffer) {
         Ok(leds) => {
             info!("LEDs initialized successfully");
-            leds
+            Some(leds)
         }
         Err(e) => {
-            defmt::panic!("Failed to initialize LEDs: {:?}", e);
+            error!(
+                "Failed to initialize LEDs: {:?} - continuing without LED support",
+                e
+            );
+            None
         }
     };
 
     // Set initial LED state: all green at 2% brightness
-    leds.set_brightness(5);
-    leds.set_all(led::Color::green());
-    if let Err(_e) = leds.show() {
-        info!("Failed to update LEDs");
-    } else {
-        info!("LEDs initialized: all green at 2% brightness");
-    }
+    if let Some(ref mut leds) = leds {
+        leds.set_brightness(5);
+        leds.set_all(led::Color::green());
+        if let Err(_e) = leds.show() {
+            info!("Failed to update LEDs");
+        } else {
+            info!("LEDs initialized: all green at 2% brightness");
+        }
 
-    // Send initial LED command state
-    LED_COMMAND.sender().send(LedCommand {
-        brightness: 5,
-        led_index: 0xFF,
-        r: 0,
-        g: 255,
-        b: 0,
-    });
+        // Send initial LED command state
+        LED_COMMAND.sender().send(LedCommand {
+            brightness: 5,
+            led_index: 0xFF,
+            r: 0,
+            g: 255,
+            b: 0,
+        });
+    }
 
     // Initialize shared I2C bus for IMU and magnetometer
     let mut delay = Delay::new();

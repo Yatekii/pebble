@@ -528,7 +528,7 @@
       "plot": "tapeout-rev0/",
       "pos_files": "tapeout-rev0/",
       "specctra_dsn": "",
-      "step": "pebble.step",
+      "step": "pebble.glb",
       "svg": "",
       "vrml": ""
     },
