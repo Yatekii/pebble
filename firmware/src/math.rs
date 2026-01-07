@@ -1,3 +1,17 @@
+//! Mathematical utilities for sensor data processing.
+//!
+//! This module provides coordinate transformations, centripetal acceleration
+//! correction, and quaternion-to-Euler angle conversion.
+//!
+//! # Coordinate Systems
+//!
+//! The PCB has sensors mounted in different orientations:
+//! - BMI270 (IMU): Rotated 90° CCW and Z points down
+//! - BMM350 (Magnetometer): Z points down (no XY rotation)
+//!
+//! These transformations convert sensor readings to a consistent world frame
+//! where +X is forward, +Y is left, and +Z is up.
+
 use nalgebra::Vector3;
 use uom::si::{
     acceleration::meter_per_second_squared,
