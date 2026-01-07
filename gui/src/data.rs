@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 /// A single 3-axis IMU reading.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ImuReading {
@@ -15,15 +17,16 @@ pub struct AhrsReading {
 }
 
 /// Stores the history of IMU readings for plotting.
+/// Uses VecDeque for O(1) push/pop operations instead of O(n) Vec::remove(0).
 pub struct ImuHistory {
     /// Accelerometer readings (raw i16 values from sensor).
-    pub accel: Vec<ImuReading>,
+    pub accel: VecDeque<ImuReading>,
     /// Gyroscope readings (raw i16 values from sensor).
-    pub gyro: Vec<ImuReading>,
+    pub gyro: VecDeque<ImuReading>,
     /// Magnetometer readings (raw i32 values from sensor).
-    pub mag: Vec<ImuReading>,
+    pub mag: VecDeque<ImuReading>,
     /// AHRS orientation readings (roll, pitch, yaw in degrees).
-    pub ahrs: Vec<AhrsReading>,
+    pub ahrs: VecDeque<AhrsReading>,
     /// Maximum number of samples to keep.
     max_samples: usize,
 }
@@ -31,10 +34,10 @@ pub struct ImuHistory {
 impl ImuHistory {
     pub fn new(max_samples: usize) -> Self {
         Self {
-            accel: Vec::with_capacity(max_samples),
-            gyro: Vec::with_capacity(max_samples),
-            mag: Vec::with_capacity(max_samples),
-            ahrs: Vec::with_capacity(max_samples),
+            accel: VecDeque::with_capacity(max_samples),
+            gyro: VecDeque::with_capacity(max_samples),
+            mag: VecDeque::with_capacity(max_samples),
+            ahrs: VecDeque::with_capacity(max_samples),
             max_samples,
         }
     }
@@ -42,33 +45,33 @@ impl ImuHistory {
     /// Push accelerometer reading.
     pub fn push_accel(&mut self, accel: ImuReading) {
         if self.accel.len() >= self.max_samples {
-            self.accel.remove(0);
+            self.accel.pop_front();
         }
-        self.accel.push(accel);
+        self.accel.push_back(accel);
     }
 
     /// Push gyroscope reading.
     pub fn push_gyro(&mut self, gyro: ImuReading) {
         if self.gyro.len() >= self.max_samples {
-            self.gyro.remove(0);
+            self.gyro.pop_front();
         }
-        self.gyro.push(gyro);
+        self.gyro.push_back(gyro);
     }
 
     /// Push magnetometer reading.
     pub fn push_mag(&mut self, mag: ImuReading) {
         if self.mag.len() >= self.max_samples {
-            self.mag.remove(0);
+            self.mag.pop_front();
         }
-        self.mag.push(mag);
+        self.mag.push_back(mag);
     }
 
     /// Push AHRS orientation reading.
     pub fn push_ahrs(&mut self, ahrs: AhrsReading) {
         if self.ahrs.len() >= self.max_samples {
-            self.ahrs.remove(0);
+            self.ahrs.pop_front();
         }
-        self.ahrs.push(ahrs);
+        self.ahrs.push_back(ahrs);
     }
 
     pub fn len(&self) -> usize {

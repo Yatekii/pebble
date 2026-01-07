@@ -298,10 +298,10 @@ impl Render for ImuViewerApp {
         let is_connected = self.connection_state == ConnectionState::Connected;
 
         let state = self.ble_state.lock();
-        let accel = state.imu_history.accel.clone();
-        let gyro = state.imu_history.gyro.clone();
-        let mag = state.imu_history.mag.clone();
-        let ahrs = state.imu_history.ahrs.clone();
+        let accel: Vec<_> = state.imu_history.accel.iter().copied().collect();
+        let gyro: Vec<_> = state.imu_history.gyro.iter().copied().collect();
+        let mag: Vec<_> = state.imu_history.mag.iter().copied().collect();
+        let ahrs: Vec<_> = state.imu_history.ahrs.iter().copied().collect();
         let sample_count = state.imu_history.len();
         drop(state);
 
