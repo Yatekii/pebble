@@ -165,24 +165,12 @@ impl MagCalibration {
     /// calibration data. For best results, rotate the device
     /// through all orientations.
     pub fn update(&mut self, x: f32, y: f32, z: f32) {
-        if x < self.x_min {
-            self.x_min = x;
-        }
-        if x > self.x_max {
-            self.x_max = x;
-        }
-        if y < self.y_min {
-            self.y_min = y;
-        }
-        if y > self.y_max {
-            self.y_max = y;
-        }
-        if z < self.z_min {
-            self.z_min = z;
-        }
-        if z > self.z_max {
-            self.z_max = z;
-        }
+        self.x_min = self.x_min.min(x);
+        self.x_max = self.x_max.max(x);
+        self.y_min = self.y_min.min(y);
+        self.y_max = self.y_max.max(y);
+        self.z_min = self.z_min.min(z);
+        self.z_max = self.z_max.max(z);
     }
 
     /// Apply hard iron calibration to a magnetometer reading.
