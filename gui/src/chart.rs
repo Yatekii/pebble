@@ -71,7 +71,7 @@ impl MultiLineChart {
         if min_val < 0.0 && max_val > 0.0 {
             ticks.push(0.0);
         }
-        ticks.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ticks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         ticks
     }
 }
