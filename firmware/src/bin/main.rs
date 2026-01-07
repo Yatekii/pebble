@@ -21,7 +21,10 @@ use panic_rtt_target as _;
 use pebble::comms::ble::{LedColorChunk, SensorServer};
 use pebble::hal::led::LED_STATE;
 use pebble::hal::{gps, imu, led, servo};
-use pebble::state::{ACTIVE_CONNECTIONS, GPS_DATA, LED_COMMAND, LedCommand, SENSOR_DATA};
+use pebble::state::{
+    ACTIVE_CONNECTIONS, DEVICE_STATUS, DeviceStatus, GPS_DATA, LED_COMMAND, LedCommand,
+    PeripheralError, PeripheralStatus, SENSOR_DATA,
+};
 use pebble::tasks;
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
@@ -62,6 +65,9 @@ async fn main(_spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
+    // Track device initialization status
+    let mut device_status = DeviceStatus::default();
+
     // Initialize LEDs
     static LED_BUFFER: StaticCell<[esp_hal::rmt::PulseCode; led::LED_BUFFER_SIZE]> =
         StaticCell::new();
@@ -69,6 +75,7 @@ async fn main(_spawner: Spawner) -> ! {
     let mut leds = match led::init(peripherals.RMT, peripherals.GPIO15, led_buffer) {
         Ok(leds) => {
             info!("LEDs initialized successfully");
+            device_status.leds = PeripheralStatus::Ok;
             Some(leds)
         }
         Err(e) => {
@@ -76,6 +83,7 @@ async fn main(_spawner: Spawner) -> ! {
                 "Failed to initialize LEDs: {:?} - continuing without LED support",
                 e
             );
+            device_status.leds = PeripheralStatus::Error(PeripheralError::InitFailed);
             None
         }
     };
@@ -119,6 +127,7 @@ async fn main(_spawner: Spawner) -> ! {
     let imu = match imu::bmi270::SharedBmi270::new(shared_i2c, &mut delay) {
         Ok(imu) => {
             info!("IMU initialized successfully");
+            device_status.imu = PeripheralStatus::Ok;
             imu
         }
         Err(e) => {
@@ -133,6 +142,7 @@ async fn main(_spawner: Spawner) -> ! {
             match imu::bmm350::SharedBmm350::new(shared_i2c, &mut delay) {
                 Ok(magnetometer) => {
                     info!("Magnetometer initialized successfully");
+                    device_status.magnetometer = PeripheralStatus::Ok;
                     result = Some(magnetometer);
                     break;
                 }
@@ -146,6 +156,9 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             }
         }
+        if result.is_none() {
+            device_status.magnetometer = PeripheralStatus::Error(PeripheralError::I2cError);
+        }
         result
     };
 
@@ -153,6 +166,7 @@ async fn main(_spawner: Spawner) -> ! {
     let mut gps = match gps::init(peripherals.UART1, peripherals.GPIO8, peripherals.GPIO18) {
         Ok(gps) => {
             info!("GPS initialized on UART1");
+            device_status.gps = PeripheralStatus::Ok;
             Some(gps)
         }
         Err(e) => {
@@ -160,6 +174,7 @@ async fn main(_spawner: Spawner) -> ! {
                 "Failed to initialize GPS: {:?} - continuing without GPS support",
                 e
             );
+            device_status.gps = PeripheralStatus::Error(PeripheralError::UartError);
             None
         }
     };
@@ -178,16 +193,19 @@ async fn main(_spawner: Spawner) -> ! {
             match servo::init_channel(ledc, peripherals.GPIO1, servo_timer) {
                 Ok(s) => {
                     info!("Servo initialized successfully");
+                    device_status.servo = PeripheralStatus::Ok;
                     Some(s)
                 }
                 Err(e) => {
                     error!("Failed to initialize servo channel: {:?}", e);
+                    device_status.servo = PeripheralStatus::Error(PeripheralError::ChannelError);
                     None
                 }
             }
         }
         Err(e) => {
             error!("Failed to initialize servo timer: {:?}", e);
+            device_status.servo = PeripheralStatus::Error(PeripheralError::TimerError);
             None
         }
     };
@@ -234,6 +252,21 @@ async fn main(_spawner: Spawner) -> ! {
     };
 
     info!("GATT server created");
+
+    // Broadcast device status and set initial BLE characteristic value
+    DEVICE_STATUS.sender().send(device_status);
+    let _ = server
+        .sensor_service
+        .device_status
+        .set(server, &device_status.to_bytes());
+    info!(
+        "Device status broadcast: LEDs={}, GPS={}, Servo={}, IMU={}, Mag={}",
+        device_status.leds.to_bytes().0,
+        device_status.gps.to_bytes().0,
+        device_status.servo.to_bytes().0,
+        device_status.imu.to_bytes().0,
+        device_status.magnetometer.to_bytes().0,
+    );
 
     // Task to run the BLE stack
     let runner_task = async {
@@ -440,8 +473,43 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             };
 
-            embassy_futures::select::select4(gatt_events, sensor_notify, led_notify, gps_notify)
-                .await;
+            // Task to send device status on connect (one-shot, then watches for changes)
+            let status_notify = async {
+                let Some(mut receiver) = DEVICE_STATUS.receiver() else {
+                    error!("No device status receiver slot available");
+                    return;
+                };
+                // Send current status immediately on connect
+                let status = receiver.get().await;
+                let _ = server
+                    .sensor_service
+                    .device_status
+                    .notify(&conn, &status.to_bytes())
+                    .await;
+
+                // Watch for any status changes (unlikely after init, but supported)
+                loop {
+                    let status = receiver.changed().await;
+                    if server
+                        .sensor_service
+                        .device_status
+                        .notify(&conn, &status.to_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+
+            embassy_futures::select::select5(
+                gatt_events,
+                sensor_notify,
+                led_notify,
+                gps_notify,
+                status_notify,
+            )
+            .await;
 
             let remaining = ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed) - 1;
             info!("Client disconnected ({} remaining)", remaining);

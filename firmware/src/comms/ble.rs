@@ -204,6 +204,15 @@ pub struct SensorService {
     #[descriptor(uuid = "2901", read, value = "GPS Position")]
     #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefa", read, notify)]
     pub gps_data: [u8; 15],
+
+    /// Device status characteristic
+    /// 16 bytes: [status, error] pairs for LEDs, GPS, Servo, IMU, Magnetometer + 6 reserved
+    /// Status: 0 = NotInitialized, 1 = Ok, 2 = Error
+    /// Error codes: 0 = None, 1 = InitFailed, 2 = I2cError, 3 = UartError, 4 = TimerError,
+    ///              5 = ChannelError, 6 = ChipIdMismatch, 7 = Timeout, 8 = OtpError
+    #[descriptor(uuid = "2901", read, value = "Device Status")]
+    #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefb", read, notify)]
+    pub device_status: [u8; 16],
 }
 
 /// GATT Server with Sensor Service
