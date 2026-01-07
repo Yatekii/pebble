@@ -10,8 +10,15 @@ use crate::state::GPS_DATA;
 /// Run the GPS task.
 ///
 /// Polls the GPS UART FIFO at 10Hz and broadcasts position data
-/// when available.
-pub async fn run(gps: &mut Gps<'_>) -> ! {
+/// when available. If GPS is None, the task does nothing.
+pub async fn run(gps: &mut Option<Gps<'_>>) -> ! {
+    let Some(gps) = gps.as_mut() else {
+        info!("GPS task disabled (no GPS hardware)");
+        loop {
+            Timer::after(Duration::from_secs(60)).await;
+        }
+    };
+
     info!("GPS task started");
 
     loop {

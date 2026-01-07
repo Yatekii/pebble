@@ -107,10 +107,13 @@ async fn main(_spawner: Spawner) -> ! {
             esp_hal::i2c::master::I2c<'static, esp_hal::Blocking>,
         >,
     > = StaticCell::new();
-    let shared_i2c = SHARED_I2C.init(
-        imu::init_shared(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO3)
-            .expect("Failed to initialize I2C"),
-    );
+    let shared_i2c = match imu::init_shared(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO3)
+    {
+        Ok(i2c) => SHARED_I2C.init(i2c),
+        Err(e) => {
+            defmt::panic!("Failed to initialize I2C: {:?}", e);
+        }
+    };
 
     // Initialize IMU on shared bus
     let imu = match imu::bmi270::SharedBmi270::new(shared_i2c, &mut delay) {
@@ -147,8 +150,19 @@ async fn main(_spawner: Spawner) -> ! {
     };
 
     // Initialize GPS on UART1 (GPIO8=RX, GPIO18=TX)
-    let mut gps = gps::init(peripherals.UART1, peripherals.GPIO8, peripherals.GPIO18);
-    info!("GPS initialized on UART1");
+    let mut gps = match gps::init(peripherals.UART1, peripherals.GPIO8, peripherals.GPIO18) {
+        Ok(gps) => {
+            info!("GPS initialized on UART1");
+            Some(gps)
+        }
+        Err(e) => {
+            error!(
+                "Failed to initialize GPS: {:?} - continuing without GPS support",
+                e
+            );
+            None
+        }
+    };
 
     // Initialize servo on GPIO1
     static LEDC: StaticCell<esp_hal::ledc::Ledc<'static>> = StaticCell::new();
@@ -158,21 +172,39 @@ async fn main(_spawner: Spawner) -> ! {
     let mut ledc = esp_hal::ledc::Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(esp_hal::ledc::LSGlobalClkSource::APBClk);
     let ledc = LEDC.init(ledc);
-    let servo_timer = SERVO_TIMER.init(servo::init_timer(ledc));
-    let mut servo = match servo::init_channel(ledc, peripherals.GPIO1, servo_timer) {
-        Ok(s) => {
-            info!("Servo initialized successfully");
-            Some(s)
+    let mut servo = match servo::init_timer(ledc) {
+        Ok(timer) => {
+            let servo_timer = SERVO_TIMER.init(timer);
+            match servo::init_channel(ledc, peripherals.GPIO1, servo_timer) {
+                Ok(s) => {
+                    info!("Servo initialized successfully");
+                    Some(s)
+                }
+                Err(e) => {
+                    error!("Failed to initialize servo channel: {:?}", e);
+                    None
+                }
+            }
         }
         Err(e) => {
-            error!("Failed to initialize servo: {:?}", e);
+            error!("Failed to initialize servo timer: {:?}", e);
             None
         }
     };
 
     // Initialize BLE
-    let radio_init = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    let transport = BleConnector::new(&radio_init, peripherals.BT, Default::default()).unwrap();
+    let radio_init = match esp_radio::init() {
+        Ok(init) => init,
+        Err(e) => {
+            defmt::panic!("Failed to initialize Wi-Fi/BLE controller: {:?}", e);
+        }
+    };
+    let transport = match BleConnector::new(&radio_init, peripherals.BT, Default::default()) {
+        Ok(t) => t,
+        Err(e) => {
+            defmt::panic!("Failed to create BLE connector: {:?}", e);
+        }
+    };
     let ble_controller = ExternalController::<_, 1>::new(transport);
 
     static HOST_RESOURCES: StaticCell<
@@ -191,13 +223,15 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Create the GATT server
     static SERVER: StaticCell<SensorServer> = StaticCell::new();
-    let server = SERVER.init(
-        SensorServer::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-            name: "Pebble",
-            appearance: &appearance::sensor::GENERIC_SENSOR,
-        }))
-        .expect("Failed to create GATT server"),
-    );
+    let server = match SensorServer::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+        name: "Pebble",
+        appearance: &appearance::sensor::GENERIC_SENSOR,
+    })) {
+        Ok(s) => SERVER.init(s),
+        Err(e) => {
+            defmt::panic!("Failed to create GATT server: {:?}", e);
+        }
+    };
 
     info!("GATT server created");
 
@@ -270,7 +304,10 @@ async fn main(_spawner: Spawner) -> ! {
 
             // Task to send sensor notifications
             let sensor_notify = async {
-                let mut receiver = SENSOR_DATA.receiver().unwrap();
+                let Some(mut receiver) = SENSOR_DATA.receiver() else {
+                    error!("No sensor data receiver slot available");
+                    return;
+                };
                 loop {
                     let data = receiver.changed().await;
                     if !data.valid {
@@ -318,7 +355,10 @@ async fn main(_spawner: Spawner) -> ! {
 
             // Task to send LED notifications (throttled to 10Hz)
             let led_notify = async {
-                let mut receiver = LED_STATE.receiver().unwrap();
+                let Some(mut receiver) = LED_STATE.receiver() else {
+                    error!("No LED state receiver slot available");
+                    return;
+                };
                 loop {
                     let state = receiver.changed().await;
                     Timer::after(Duration::from_millis(100)).await;
@@ -382,7 +422,10 @@ async fn main(_spawner: Spawner) -> ! {
 
             // Task to send GPS notifications
             let gps_notify = async {
-                let mut receiver = GPS_DATA.receiver().unwrap();
+                let Some(mut receiver) = GPS_DATA.receiver() else {
+                    error!("No GPS data receiver slot available");
+                    return;
+                };
                 loop {
                     let data = receiver.changed().await;
                     if server
@@ -407,7 +450,10 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Task to sync LED state to BLE characteristics
     let led_ble_sync_task = async {
-        let mut receiver = LED_STATE.receiver().unwrap();
+        let Some(mut receiver) = LED_STATE.receiver() else {
+            error!("No LED state receiver slot available for BLE sync");
+            return;
+        };
         loop {
             let state = receiver.changed().await;
 

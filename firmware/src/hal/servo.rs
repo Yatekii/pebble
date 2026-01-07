@@ -52,16 +52,14 @@ impl Servo<'_> {
 
 /// Initialize the LEDC timer for servo use.
 /// The timer must be stored in a StaticCell and passed to init_with_timer.
-pub fn init_timer<'a>(ledc: &'a Ledc<'a>) -> timer::Timer<'a, LowSpeed> {
+pub fn init_timer<'a>(ledc: &'a Ledc<'a>) -> Result<timer::Timer<'a, LowSpeed>, timer::Error> {
     let mut timer = ledc.timer::<LowSpeed>(timer::Number::Timer0);
-    timer
-        .configure(timer::config::Config {
-            duty: DUTY_RESOLUTION,
-            clock_source: timer::LSClockSource::APBClk,
-            frequency: Rate::from_hz(50),
-        })
-        .expect("Failed to configure LEDC timer");
-    timer
+    timer.configure(timer::config::Config {
+        duty: DUTY_RESOLUTION,
+        clock_source: timer::LSClockSource::APBClk,
+        frequency: Rate::from_hz(50),
+    })?;
+    Ok(timer)
 }
 
 /// Initialize the servo channel using a pre-configured timer.

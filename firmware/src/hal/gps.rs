@@ -130,14 +130,14 @@ pub fn init(
     uart: esp_hal::peripherals::UART1<'static>,
     rx: esp_hal::peripherals::GPIO8<'static>,
     tx: esp_hal::peripherals::GPIO18<'static>,
-) -> Gps<'static> {
+) -> Result<Gps<'static>, esp_hal::uart::ConfigError> {
     defmt::info!("GPS: configuring UART1 at 9600 baud");
     let config = UartConfig::default()
         .with_baudrate(9600)
         .with_rx(RxConfig::default())
         .with_tx(TxConfig::default());
 
-    let mut uart = Uart::new(uart, config).unwrap().with_rx(rx).with_tx(tx);
+    let mut uart = Uart::new(uart, config)?.with_rx(rx).with_tx(tx);
 
     // Configure antenna supervisor via CFG-ANT
     let flags: u16 = 0x0001; // svcs only - antenna voltage control
@@ -191,13 +191,13 @@ pub fn init(
 
     defmt::info!("GPS: init complete");
 
-    Gps {
+    Ok(Gps {
         _uart: uart,
         nmea: Nmea::default(),
         ubx_parser: UbxParser::new(),
         line_buffer: [0; 128],
         line_pos: 0,
-    }
+    })
 }
 
 /// UBX protocol parser for decoding binary responses
