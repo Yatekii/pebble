@@ -91,14 +91,11 @@ impl<'d> Gps<'d> {
                             result = Some(self.to_gps_data());
                         }
                         Err(e) => {
-                            // TXT sentences are status messages we don't need
-                            if !sentence.contains("TXT") {
-                                defmt::warn!(
-                                    "NMEA parse error for '{}': {:?}",
-                                    sentence,
-                                    defmt::Debug2Format(&e)
-                                );
-                            }
+                            defmt::warn!(
+                                "NMEA parse error for '{}': {:?}",
+                                sentence,
+                                defmt::Debug2Format(&e)
+                            );
                         }
                     }
                 }
