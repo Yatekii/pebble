@@ -152,6 +152,31 @@ pub fn init(
 
     let mut uart = Uart::new(uart, config)?.with_rx(rx).with_tx(tx);
 
+    // Reset GPS to factory defaults using CFG-CFG
+    // clearMask = 0x1F (all sections), loadMask = 0x1F (all sections), deviceMask = 0x17 (all)
+    #[rustfmt::skip]
+    let mut cfg_cfg_reset: [u8; 21] = [
+        0xB5, 0x62,             // Sync
+        0x06, 0x09,             // Class/ID: CFG-CFG
+        0x0D, 0x00,             // Length: 13 bytes
+        0x1F, 0x00, 0x00, 0x00, // clearMask: all sections
+        0x00, 0x00, 0x00, 0x00, // saveMask: none
+        0x1F, 0x00, 0x00, 0x00, // loadMask: all sections (load defaults)
+        0x17,                   // deviceMask: BBR, Flash, EEPROM, SPI
+        0x00, 0x00,             // Checksum placeholder
+    ];
+    let (ck_a, ck_b) = ubx_checksum(&cfg_cfg_reset[2..19]);
+    cfg_cfg_reset[19] = ck_a;
+    cfg_cfg_reset[20] = ck_b;
+
+    defmt::info!("GPS: resetting to factory defaults");
+    let _ = embedded_io::Write::write_all(&mut uart, &cfg_cfg_reset);
+
+    // Wait for reset to complete
+    for _ in 0..500000 {
+        core::hint::spin_loop();
+    }
+
     // Configure antenna supervisor via CFG-ANT
     let flags: u16 = 0x0001; // svcs only - antenna voltage control
     let pins: u16 = 0x0000; // Use dedicated LNA_EN pin
@@ -178,65 +203,6 @@ pub fn init(
     let _ = embedded_io::Write::write_all(&mut uart, &cfg_ant);
 
     // Small delay
-    for _ in 0..100000 {
-        core::hint::spin_loop();
-    }
-
-    // Enable multiple GNSS constellations via CFG-GNSS
-    // This configures GPS + GLONASS + Galileo for better satellite coverage
-    // Message structure: CFG-GNSS (0x06 0x3E)
-    // Payload: 4 bytes header + 4 config blocks × 8 bytes = 36 bytes
-    // Total: sync(2) + class/id(2) + len(2) + payload(36) + checksum(2) = 44 bytes
-    #[rustfmt::skip]
-    let mut cfg_gnss: [u8; 44] = [
-        0xB5, 0x62,             // Sync
-        0x06, 0x3E,             // Class/ID: CFG-GNSS
-        0x24, 0x00,             // Length: 36 bytes
-
-        // Header (4 bytes)
-        0x00,                   // msgVer: 0
-        0x00,                   // numTrkChHw: read-only, set to 0
-        0x20,                   // numTrkChUse: 32 channels
-        0x04,                   // numConfigBlocks: 4
-
-        // GPS (gnssId=0): enabled, 8-16 channels
-        0x00,                   // gnssId: GPS
-        0x08,                   // resTrkCh: 8
-        0x10,                   // maxTrkCh: 16
-        0x00,                   // reserved
-        0x01, 0x00, 0x01, 0x01, // flags: enabled
-
-        // SBAS (gnssId=1): disabled
-        0x01,                   // gnssId: SBAS
-        0x01,                   // resTrkCh: 1
-        0x03,                   // maxTrkCh: 3
-        0x00,                   // reserved
-        0x00, 0x00, 0x01, 0x01, // flags: disabled
-
-        // Galileo (gnssId=2): enabled, 4-8 channels
-        0x02,                   // gnssId: Galileo
-        0x04,                   // resTrkCh: 4
-        0x08,                   // maxTrkCh: 8
-        0x00,                   // reserved
-        0x01, 0x00, 0x01, 0x01, // flags: enabled
-
-        // GLONASS (gnssId=6): enabled, 4-8 channels
-        0x06,                   // gnssId: GLONASS
-        0x04,                   // resTrkCh: 4
-        0x08,                   // maxTrkCh: 8
-        0x00,                   // reserved
-        0x01, 0x00, 0x01, 0x01, // flags: enabled
-
-        0x00, 0x00,             // Checksum placeholder
-    ];
-    let (ck_a, ck_b) = ubx_checksum(&cfg_gnss[2..42]);
-    cfg_gnss[42] = ck_a;
-    cfg_gnss[43] = ck_b;
-
-    defmt::info!("GPS: enabling GPS + Galileo + GLONASS constellations");
-    let _ = embedded_io::Write::write_all(&mut uart, &cfg_gnss);
-
-    // Small delay for config to apply
     for _ in 0..100000 {
         core::hint::spin_loop();
     }
