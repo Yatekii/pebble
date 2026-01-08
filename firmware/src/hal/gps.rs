@@ -50,16 +50,49 @@ impl<'d> Gps<'d> {
             if byte == b'\n' && self.line_pos > 1 {
                 if let Ok(sentence) = core::str::from_utf8(&self.line_buffer[..self.line_pos]) {
                     let sentence = sentence.trim();
-                    match self.nmea.parse(sentence) {
+
+                    // Fix GSV sentences with 0 satellites - nmea crate expects trailing comma
+                    // e.g., "$GPGSV,1,1,00*79" -> "$GPGSV,1,1,00,*XX" with recalculated checksum
+                    let mut fixed_buf = [0u8; 140];
+                    let parse_sentence = if sentence.contains("GSV") && sentence.contains(",00*") {
+                        if let Some(star_idx) = sentence.find('*') {
+                            // Get data between $ and *, add comma after it
+                            let data = &sentence[1..star_idx];
+                            let new_data_len = data.len() + 1; // +1 for added comma
+
+                            // Build: $<data>,*<checksum>
+                            fixed_buf[0] = b'$';
+                            fixed_buf[1..1 + data.len()].copy_from_slice(data.as_bytes());
+                            fixed_buf[1 + data.len()] = b',';
+                            fixed_buf[2 + data.len()] = b'*';
+
+                            // Calculate new checksum (XOR of bytes between $ and *)
+                            let mut checksum: u8 = 0;
+                            for &b in &fixed_buf[1..1 + new_data_len] {
+                                checksum ^= b;
+                            }
+
+                            // Write checksum as hex
+                            let hex_chars = b"0123456789ABCDEF";
+                            fixed_buf[3 + data.len()] = hex_chars[(checksum >> 4) as usize];
+                            fixed_buf[4 + data.len()] = hex_chars[(checksum & 0xF) as usize];
+
+                            let total_len = 5 + data.len();
+                            core::str::from_utf8(&fixed_buf[..total_len]).unwrap_or(sentence)
+                        } else {
+                            sentence
+                        }
+                    } else {
+                        sentence
+                    };
+
+                    match self.nmea.parse(parse_sentence) {
                         Ok(_) => {
                             result = Some(self.to_gps_data());
                         }
                         Err(e) => {
-                            // GSV with 0 satellites fails due to nmea crate bug - don't warn
-                            // TXT sentences are status messages we don't need - don't warn
-                            let is_gsv_zero = sentence.contains("GSV") && sentence.contains(",00*");
-                            let is_txt = sentence.contains("TXT");
-                            if !is_gsv_zero && !is_txt {
+                            // TXT sentences are status messages we don't need
+                            if !sentence.contains("TXT") {
                                 defmt::warn!(
                                     "NMEA parse error for '{}': {:?}",
                                     sentence,
