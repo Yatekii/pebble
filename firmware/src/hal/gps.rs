@@ -57,23 +57,32 @@ impl<'d> Gps<'d> {
                     let sentence = sentence.trim();
                     // Only parse if it looks like a valid NMEA sentence
                     if sentence.starts_with('$') && sentence.len() > 6 {
-                        // Skip GSV sentences with 0 satellites - nmea crate can't parse them
+                        // GSV sentences with 0 satellites can't be parsed by nmea crate
+                        // due to missing trailing comma (nmea crate bug).
                         // Format: $G?GSV,1,1,00*XX means "0 satellites in view"
+                        // The parser expects a comma after "00" but the sentence ends there.
                         let is_empty_gsv = sentence.len() > 10
                             && &sentence[3..6] == "GSV"
-                            && sentence.contains(",1,1,00*");
+                            && sentence.contains(",00*");
 
                         if is_empty_gsv {
-                            // Valid but empty GSV, skip silently
-                        } else if let Err(e) = self.nmea.parse(sentence) {
-                            // Only log at debug level - many sentences are expected to fail
-                            defmt::debug!(
-                                "NMEA parse: '{}': {:?}",
-                                sentence,
-                                defmt::Debug2Format(&e)
-                            );
-                        } else {
+                            // Valid sentence indicating 0 satellites in view
+                            // Can't parse with nmea crate, but we know what it means
+                            defmt::info!("NMEA: {} (0 satellites in view)", &sentence[1..6]);
                             result = Some(self.to_gps_data());
+                        } else {
+                            match self.nmea.parse(sentence) {
+                                Ok(_) => {
+                                    result = Some(self.to_gps_data());
+                                }
+                                Err(e) => {
+                                    defmt::warn!(
+                                        "NMEA parse error for '{}': {:?}",
+                                        sentence,
+                                        defmt::Debug2Format(&e)
+                                    );
+                                }
+                            }
                         }
                     }
                 }
