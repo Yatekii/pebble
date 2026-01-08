@@ -36,61 +36,28 @@ impl<'d> Gps<'d> {
             // Try UBX parsing for binary responses
             self.ubx_parser.process(byte);
 
-            // Buffer NMEA sentences - start fresh when we see '$'
+            // Buffer NMEA sentences
             if byte == b'$' {
                 self.line_pos = 0;
-                self.line_buffer[0] = byte;
-                self.line_pos = 1;
-                continue;
             }
 
-            // Only buffer if we've seen a '$' start
-            if self.line_pos > 0 && self.line_pos < self.line_buffer.len() {
+            if self.line_pos < self.line_buffer.len() {
                 self.line_buffer[self.line_pos] = byte;
                 self.line_pos += 1;
             }
 
             // Check for end of NMEA sentence
-            if byte == b'\n' && self.line_pos > 6 {
-                // Minimum valid NMEA: "$GPXXX" + CR + LF = 8 chars
+            if byte == b'\n' && self.line_pos > 1 {
                 if let Ok(sentence) = core::str::from_utf8(&self.line_buffer[..self.line_pos]) {
                     let sentence = sentence.trim();
-                    // Only parse if it looks like a valid NMEA sentence
-                    if sentence.starts_with('$') && sentence.len() > 6 {
-                        // GSV sentences with 0 satellites can't be parsed by nmea crate
-                        // due to missing trailing comma (nmea crate bug).
-                        // Format: $G?GSV,1,1,00*XX means "0 satellites in view"
-                        // The parser expects a comma after "00" but the sentence ends there.
-                        let is_empty_gsv = sentence.len() > 10
-                            && &sentence[3..6] == "GSV"
-                            && sentence.contains(",00*");
-
-                        // TXT sentences are status messages, not navigation data
-                        // The nmea crate doesn't fully support them, so log and skip
-                        let is_txt = sentence.len() > 5 && &sentence[3..6] == "TXT";
-
-                        if is_empty_gsv {
-                            // Valid sentence indicating 0 satellites in view
-                            // Can't parse with nmea crate, but we know what it means
-                            defmt::info!("NMEA: {} (0 satellites in view)", &sentence[1..6]);
-                            result = Some(self.to_gps_data());
-                        } else if is_txt {
-                            // Log TXT messages at debug level - they're status info
-                            defmt::debug!("GPS TXT: {}", sentence);
-                        } else {
-                            match self.nmea.parse(sentence) {
-                                Ok(_) => {
-                                    result = Some(self.to_gps_data());
-                                }
-                                Err(e) => {
-                                    defmt::warn!(
-                                        "NMEA parse error for '{}': {:?}",
-                                        sentence,
-                                        defmt::Debug2Format(&e)
-                                    );
-                                }
-                            }
-                        }
+                    if let Err(e) = self.nmea.parse(sentence) {
+                        defmt::warn!(
+                            "NMEA parse error for '{}': {:?}",
+                            sentence,
+                            defmt::Debug2Format(&e)
+                        );
+                    } else {
+                        result = Some(self.to_gps_data());
                     }
                 }
                 self.line_pos = 0;
