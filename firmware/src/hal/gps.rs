@@ -50,14 +50,23 @@ impl<'d> Gps<'d> {
             if byte == b'\n' && self.line_pos > 1 {
                 if let Ok(sentence) = core::str::from_utf8(&self.line_buffer[..self.line_pos]) {
                     let sentence = sentence.trim();
-                    if let Err(e) = self.nmea.parse(sentence) {
-                        defmt::warn!(
-                            "NMEA parse error for '{}': {:?}",
-                            sentence,
-                            defmt::Debug2Format(&e)
-                        );
-                    } else {
-                        result = Some(self.to_gps_data());
+                    match self.nmea.parse(sentence) {
+                        Ok(_) => {
+                            result = Some(self.to_gps_data());
+                        }
+                        Err(e) => {
+                            // GSV with 0 satellites fails due to nmea crate bug - don't warn
+                            // TXT sentences are status messages we don't need - don't warn
+                            let is_gsv_zero = sentence.contains("GSV") && sentence.contains(",00*");
+                            let is_txt = sentence.contains("TXT");
+                            if !is_gsv_zero && !is_txt {
+                                defmt::warn!(
+                                    "NMEA parse error for '{}': {:?}",
+                                    sentence,
+                                    defmt::Debug2Format(&e)
+                                );
+                            }
+                        }
                     }
                 }
                 self.line_pos = 0;
