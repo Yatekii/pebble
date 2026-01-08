@@ -144,7 +144,12 @@ pub struct MagCalibration {
     y_max: f32,
     z_min: f32,
     z_max: f32,
+    sample_count: u32,
 }
+
+/// Minimum samples required before calibration can be applied.
+/// This ensures we have enough data spread to avoid near-zero calibrated values.
+const MIN_CALIBRATION_SAMPLES: u32 = 50;
 
 impl MagCalibration {
     /// Create a new calibration state with no data.
@@ -156,7 +161,13 @@ impl MagCalibration {
             y_max: f32::MIN,
             z_min: f32::MAX,
             z_max: f32::MIN,
+            sample_count: 0,
         }
+    }
+
+    /// Returns true if enough samples have been collected for calibration.
+    pub fn is_ready(&self) -> bool {
+        self.sample_count >= MIN_CALIBRATION_SAMPLES
     }
 
     /// Update calibration with a new magnetometer reading.
@@ -171,6 +182,7 @@ impl MagCalibration {
         self.y_max = self.y_max.max(y);
         self.z_min = self.z_min.min(z);
         self.z_max = self.z_max.max(z);
+        self.sample_count = self.sample_count.saturating_add(1);
     }
 
     /// Apply hard iron calibration to a magnetometer reading.

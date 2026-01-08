@@ -63,15 +63,8 @@ where
             z: (z_ut * 100.0) as i32,
         };
 
-        // Update and apply hard iron calibration
+        // Update hard iron calibration with raw values
         mag_cal.update(x_ut, y_ut, z_ut);
-        let (x_cal, y_cal, z_cal) = mag_cal.apply(x_ut, y_ut, z_ut);
-
-        // Transform to world frame (Z points down on PCB, so flip it)
-        let mag_transformed = transform_bmm350(Vector3::new(x_cal, y_cal, z_cal));
-
-        // Create calibrated magnetic field vector for AHRS
-        let mag_calibrated = mag_transformed.map(|v| MagneticFluxDensity::new::<microtesla>(v));
 
         // Need IMU data for AHRS - skip if not available
         let Ok(imu_data) = &imu_result else {
@@ -89,13 +82,26 @@ where
             IMU_OFFSET,
         );
 
-        // Update AHRS filter - this fuses accel, gyro, and mag for stable orientation
-        let orientation =
-            ahrs.update_marg(acceleration, angular_velocity_corrected, mag_calibrated);
+        // Only run AHRS once magnetometer calibration has enough samples
+        // to avoid division by zero from near-zero calibrated values
+        let orientation = if mag_cal.is_ready() {
+            // Apply hard iron calibration
+            let (x_cal, y_cal, z_cal) = mag_cal.apply(x_ut, y_ut, z_ut);
 
-        // Use AHRS yaw as compass heading (tilt-compensated and filtered)
+            // Transform to world frame (Z points down on PCB, so flip it)
+            let mag_transformed = transform_bmm350(Vector3::new(x_cal, y_cal, z_cal));
+
+            // Create calibrated magnetic field vector for AHRS
+            let mag_calibrated = mag_transformed.map(|v| MagneticFluxDensity::new::<microtesla>(v));
+
+            // Update AHRS filter - this fuses accel, gyro, and mag for stable orientation
+            ahrs.update_marg(acceleration, angular_velocity_corrected, mag_calibrated)
+        } else {
+            // During calibration warmup, return default orientation
+            crate::filter::ahrs::Orientation::default()
+        };
+
         let heading = orientation.heading();
-
         COMPASS_HEADING.sender().send(heading);
 
         // Log periodically (every 50 samples = 1 second at 50Hz)
