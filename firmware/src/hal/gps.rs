@@ -65,11 +65,18 @@ impl<'d> Gps<'d> {
                             && &sentence[3..6] == "GSV"
                             && sentence.contains(",00*");
 
+                        // TXT sentences are status messages, not navigation data
+                        // The nmea crate doesn't fully support them, so log and skip
+                        let is_txt = sentence.len() > 5 && &sentence[3..6] == "TXT";
+
                         if is_empty_gsv {
                             // Valid sentence indicating 0 satellites in view
                             // Can't parse with nmea crate, but we know what it means
                             defmt::info!("NMEA: {} (0 satellites in view)", &sentence[1..6]);
                             result = Some(self.to_gps_data());
+                        } else if is_txt {
+                            // Log TXT messages at debug level - they're status info
+                            defmt::debug!("GPS TXT: {}", sentence);
                         } else {
                             match self.nmea.parse(sentence) {
                                 Ok(_) => {
@@ -265,6 +272,7 @@ pub fn init(
         SentenceType::RMC, // Recommended minimum data
         SentenceType::VTG, // Course over ground
         SentenceType::GLL, // Geographic position
+        SentenceType::TXT, // Text messages (status info from GPS)
     ])
     .unwrap_or_default();
 
