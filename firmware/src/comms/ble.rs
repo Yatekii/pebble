@@ -141,6 +141,93 @@ impl GpsBleData {
     }
 }
 
+/// Maximum satellites per BLE chunk (to fit in BLE MTU)
+/// Each satellite: gnss_type (1) + prn (1) + elevation (1) + azimuth (2) + snr (1) = 6 bytes
+/// With 1 byte count header: 1 + 12*6 = 73 bytes (fits in typical 185+ byte MTU)
+pub const SATS_PER_CHUNK: usize = 12;
+
+/// Satellite info chunk for BLE transmission
+/// Format: [count, (gnss_type, prn, elevation, azimuth_lo, azimuth_hi, snr) * 12]
+#[derive(Clone, Copy)]
+pub struct SatelliteChunk(pub [u8; 73]);
+
+impl Default for SatelliteChunk {
+    fn default() -> Self {
+        Self([0u8; 73])
+    }
+}
+
+impl AsRef<[u8]> for SatelliteChunk {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl trouble_host::types::gatt_traits::AsGatt for SatelliteChunk {
+    const MIN_SIZE: usize = 0;
+    const MAX_SIZE: usize = 73;
+
+    fn as_gatt(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl trouble_host::types::gatt_traits::FromGatt for SatelliteChunk {
+    fn from_gatt(data: &[u8]) -> Result<Self, trouble_host::types::gatt_traits::FromGattError> {
+        if data.len() > 73 {
+            return Err(trouble_host::types::gatt_traits::FromGattError::InvalidLength);
+        }
+        let mut arr = [0u8; 73];
+        arr[..data.len()].copy_from_slice(data);
+        Ok(Self(arr))
+    }
+}
+
+/// Satellite BLE data with satellite details
+#[derive(Clone, Copy, Default)]
+pub struct SatelliteBleData {
+    /// GNSS type (0=Unknown, 1=GPS, 2=GLONASS, 3=Galileo, 4=BeiDou, 5=QZSS, 6=SBAS)
+    pub gnss_type: u8,
+    /// Satellite PRN/ID
+    pub prn: u8,
+    /// Elevation in degrees (0-90)
+    pub elevation: u8,
+    /// Azimuth in degrees (0-359)
+    pub azimuth: u16,
+    /// Signal-to-noise ratio in dB-Hz (0-99)
+    pub snr: u8,
+}
+
+impl SatelliteBleData {
+    /// Serialize satellite data to 6 bytes
+    pub fn to_bytes(&self) -> [u8; 6] {
+        [
+            self.gnss_type,
+            self.prn,
+            self.elevation,
+            (self.azimuth & 0xFF) as u8,
+            ((self.azimuth >> 8) & 0xFF) as u8,
+            self.snr,
+        ]
+    }
+}
+
+/// Serialize a chunk of satellites (up to 12) into BLE format
+/// Returns the chunk data with count in first byte
+pub fn satellites_to_chunk(satellites: &[SatelliteBleData]) -> SatelliteChunk {
+    let mut chunk = SatelliteChunk::default();
+    let count = satellites.len().min(SATS_PER_CHUNK);
+    chunk.0[0] = count as u8;
+
+    for (i, sat) in satellites.iter().take(SATS_PER_CHUNK).enumerate() {
+        let offset = 1 + i * 6;
+        let bytes = sat.to_bytes();
+        chunk.0[offset..offset + 6].copy_from_slice(&bytes);
+    }
+
+    chunk
+}
+
 /// Pebble Sensor Service GATT definition
 #[gatt_service(uuid = "12345678-1234-5678-1234-56789abcdef0")]
 pub struct SensorService {
@@ -204,6 +291,18 @@ pub struct SensorService {
     #[descriptor(uuid = "2901", read, value = "GPS Position")]
     #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefa", read, notify)]
     pub gps_data: [u8; 15],
+
+    /// Satellite info chunk 0 (satellites 0-11)
+    /// 73 bytes: count (u8), then 12x [gnss_type (u8), prn (u8), elevation (u8), azimuth (u16 LE), snr (u8)]
+    #[descriptor(uuid = "2901", read, value = "Satellites 0-11")]
+    #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefc", read, notify)]
+    pub satellites_0: SatelliteChunk,
+
+    /// Satellite info chunk 1 (satellites 12-23)
+    /// 73 bytes: count (u8), then 12x [gnss_type (u8), prn (u8), elevation (u8), azimuth (u16 LE), snr (u8)]
+    #[descriptor(uuid = "2901", read, value = "Satellites 12-23")]
+    #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefd", read, notify)]
+    pub satellites_1: SatelliteChunk,
 
     /// Device status characteristic
     /// 16 bytes: [status, error] pairs for LEDs, GPS, Servo, IMU, Magnetometer + 6 reserved

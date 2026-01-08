@@ -6,7 +6,7 @@ use gpui_component_assets::Assets;
 use parking_lot::Mutex;
 
 use crate::ble::{
-    BleMessage, BleState, ConnectionState, DeviceStatusData, GpsReading, LedColors,
+    BleMessage, BleState, ConnectionState, DeviceStatusData, GpsReading, LedColors, SatelliteInfo,
     start_ble_client,
 };
 use crate::chart::{MultiLineChart, Series};
@@ -33,6 +33,10 @@ pub struct ImuViewerApp {
     connection_state: ConnectionState,
     led_colors: LedColors,
     gps_reading: GpsReading,
+    /// Satellite info from chunk 0 (satellites 0-11)
+    satellites_0: Vec<SatelliteInfo>,
+    /// Satellite info from chunk 1 (satellites 12-23)
+    satellites_1: Vec<SatelliteInfo>,
     pcb_mesh: Option<Arc<Mesh3D>>,
     device_status: Option<DeviceStatusData>,
 }
@@ -103,6 +107,8 @@ impl ImuViewerApp {
             connection_state: ConnectionState::Disconnected,
             led_colors: [[0; 3]; 72],
             gps_reading: GpsReading::default(),
+            satellites_0: Vec::new(),
+            satellites_1: Vec::new(),
             pcb_mesh,
             device_status: None,
         }
@@ -150,6 +156,13 @@ impl ImuViewerApp {
             }
             BleMessage::DeviceStatus(status) => {
                 self.device_status = Some(status);
+            }
+            BleMessage::SatelliteChunk(chunk, satellites) => {
+                if chunk == 0 {
+                    self.satellites_0 = satellites;
+                } else {
+                    self.satellites_1 = satellites;
+                }
             }
         }
     }
@@ -378,14 +391,20 @@ impl Render for ImuViewerApp {
                                 led_colors,
                                 self.pcb_mesh.clone(),
                             )))
-                            .child(div().flex_1().min_h_0().child(MapViewElement::new(
-                                GpsPosition {
-                                    latitude: self.gps_reading.latitude as f64,
-                                    longitude: self.gps_reading.longitude as f64,
-                                },
-                                self.gps_reading.satellites,
-                                self.gps_reading.has_fix,
-                            ))),
+                            .child(div().flex_1().min_h_0().child({
+                                // Combine satellite chunks
+                                let mut all_sats = self.satellites_0.clone();
+                                all_sats.extend(self.satellites_1.iter().cloned());
+                                MapViewElement::new(
+                                    GpsPosition {
+                                        latitude: self.gps_reading.latitude as f64,
+                                        longitude: self.gps_reading.longitude as f64,
+                                    },
+                                    self.gps_reading.satellites,
+                                    self.gps_reading.has_fix,
+                                    all_sats,
+                                )
+                            })),
                     )
                     // Device status and puzzle list on the right
                     .child(

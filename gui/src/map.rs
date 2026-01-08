@@ -3,6 +3,8 @@
 use gpui::*;
 use gpui_component::ActiveTheme;
 
+use crate::ble::{GnssType, SatelliteInfo};
+
 /// GPS coordinates
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GpsPosition {
@@ -40,15 +42,22 @@ pub struct MapViewElement {
     zoom: u32,
     satellites: u8,
     has_fix: bool,
+    satellite_info: Vec<SatelliteInfo>,
 }
 
 impl MapViewElement {
-    pub fn new(position: GpsPosition, satellites: u8, has_fix: bool) -> Self {
+    pub fn new(
+        position: GpsPosition,
+        satellites: u8,
+        has_fix: bool,
+        satellite_info: Vec<SatelliteInfo>,
+    ) -> Self {
         Self {
             position,
             zoom: 15,
             satellites,
             has_fix,
+            satellite_info,
         }
     }
 }
@@ -127,6 +136,8 @@ impl RenderOnce for MapViewElement {
 
         // Build the coordinates overlay
         let fix_indicator = if self.has_fix { "●" } else { "○" };
+        // Show satellites in view (from satellite_info) rather than fix satellites
+        let sats_in_view = self.satellite_info.len();
         let coords = div()
             .absolute()
             .bottom_2()
@@ -138,8 +149,8 @@ impl RenderOnce for MapViewElement {
             .text_xs()
             .text_color(hsla(0.0, 0.0, 1.0, 1.0))
             .child(format!(
-                "{:.4}, {:.4} | {} {} sats",
-                position.latitude, position.longitude, fix_indicator, self.satellites
+                "{:.4}, {:.4} | {} {} in view",
+                position.latitude, position.longitude, fix_indicator, sats_in_view
             ));
 
         // Corner masks - draw filled paths that cover the corners outside the rounded area
@@ -280,12 +291,15 @@ impl RenderOnce for MapViewElement {
             .border_1()
             .border_color(border_color);
 
-        // Main container
-        div()
-            .id("map-view")
+        // Build satellite info panel
+        let satellite_panel = self.build_satellite_panel(theme);
+
+        // Map container
+        let map_container = div()
+            .id("map-container")
             .w_full()
-            .h_full()
-            .min_h(px(200.0))
+            .flex_1()
+            .min_h(px(150.0))
             .overflow_hidden()
             .relative()
             .child(tile_grid)
@@ -295,6 +309,157 @@ impl RenderOnce for MapViewElement {
             .child(corner_tr)
             .child(corner_bl)
             .child(corner_br)
-            .child(border_overlay)
+            .child(border_overlay);
+
+        // Main container with satellite panel above map
+        div()
+            .id("map-view")
+            .w_full()
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(satellite_panel)
+            .child(map_container)
+    }
+}
+
+impl MapViewElement {
+    /// Build the satellite info panel showing constellation breakdown
+    fn build_satellite_panel(&self, theme: &gpui_component::theme::Theme) -> impl IntoElement {
+        // Count satellites by constellation
+        let mut gps_count = 0u8;
+        let mut galileo_count = 0u8;
+        let mut beidou_count = 0u8;
+        let mut glonass_count = 0u8;
+        let mut other_count = 0u8;
+
+        // Collect satellites with signal (SNR > 0)
+        let mut tracked_sats: Vec<&SatelliteInfo> = Vec::new();
+
+        for sat in &self.satellite_info {
+            if sat.snr > 0 {
+                tracked_sats.push(sat);
+            }
+            match sat.gnss_type {
+                GnssType::Gps => gps_count += 1,
+                GnssType::Galileo => galileo_count += 1,
+                GnssType::BeiDou => beidou_count += 1,
+                GnssType::Glonass => glonass_count += 1,
+                _ => other_count += 1,
+            }
+        }
+
+        // Sort by SNR descending
+        tracked_sats.sort_by(|a, b| b.snr.cmp(&a.snr));
+
+        // Total satellites in view for header
+        let total_in_view = self.satellite_info.len();
+
+        // Build satellite bars showing signal strength
+        let sat_bars: Vec<_> = tracked_sats
+            .iter()
+            .take(12) // Show top 12 by signal
+            .map(|sat| {
+                let color = match sat.gnss_type {
+                    GnssType::Gps => hsla(0.6, 0.7, 0.5, 1.0),     // Blue
+                    GnssType::Galileo => hsla(0.1, 0.8, 0.5, 1.0), // Orange
+                    GnssType::BeiDou => hsla(0.0, 0.8, 0.5, 1.0),  // Red
+                    GnssType::Glonass => hsla(0.3, 0.7, 0.5, 1.0), // Green
+                    _ => hsla(0.0, 0.0, 0.5, 1.0),                 // Gray
+                };
+                // SNR typically 0-50 dB-Hz, normalize to bar height
+                let bar_height = ((sat.snr as f32 / 50.0) * 24.0).clamp(2.0, 24.0);
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_px()
+                    .child(div().w(px(8.0)).h(px(bar_height)).bg(color).rounded_t_sm())
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .text_size(px(8.0))
+                            .child(format!("{}", sat.prn)),
+                    )
+            })
+            .collect();
+
+        // Legend items for constellations that are present (with counts)
+        let mut legend_items: Vec<(String, Hsla)> = Vec::new();
+        if gps_count > 0 {
+            legend_items.push((format!("GPS:{}", gps_count), hsla(0.6, 0.7, 0.5, 1.0)));
+        }
+        if galileo_count > 0 {
+            legend_items.push((format!("GAL:{}", galileo_count), hsla(0.1, 0.8, 0.5, 1.0)));
+        }
+        if beidou_count > 0 {
+            legend_items.push((format!("BDS:{}", beidou_count), hsla(0.0, 0.8, 0.5, 1.0)));
+        }
+        if glonass_count > 0 {
+            legend_items.push((format!("GLO:{}", glonass_count), hsla(0.3, 0.7, 0.5, 1.0)));
+        }
+
+        let legend = div()
+            .flex()
+            .flex_row()
+            .gap_2()
+            .children(legend_items.into_iter().map(|(name, color)| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(div().w(px(8.0)).h(px(8.0)).bg(color).rounded_sm())
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .text_size(px(9.0))
+                            .child(name),
+                    )
+            }));
+
+        div()
+            .id("satellite-panel")
+            .w_full()
+            .px_2()
+            .py_1()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    // Header
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child(format!("Satellites ({})", total_in_view)),
+                    )
+                    // Signal strength bars and legend
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_end()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_end()
+                                    .gap_1()
+                                    .h(px(36.0))
+                                    .children(sat_bars),
+                            )
+                            .child(legend),
+                    ),
+            )
     }
 }

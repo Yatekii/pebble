@@ -23,7 +23,7 @@ use pebble::hal::led::LED_STATE;
 use pebble::hal::{gps, imu, led, servo};
 use pebble::state::{
     ACTIVE_CONNECTIONS, DEVICE_STATUS, DeviceStatus, GPS_DATA, LED_COMMAND, LedCommand,
-    PeripheralError, PeripheralStatus, SENSOR_DATA,
+    PeripheralError, PeripheralStatus, SATELLITES_0, SATELLITES_1, SENSOR_DATA,
 };
 use pebble::tasks;
 use static_cell::StaticCell;
@@ -479,6 +479,46 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             };
 
+            // Task to send satellite info notifications (chunk 0)
+            let satellites_0_notify = async {
+                let Some(mut receiver) = SATELLITES_0.receiver() else {
+                    error!("No satellites_0 receiver slot available");
+                    return;
+                };
+                loop {
+                    let data = receiver.changed().await;
+                    if server
+                        .sensor_service
+                        .satellites_0
+                        .notify(&conn, &data)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+
+            // Task to send satellite info notifications (chunk 1)
+            let satellites_1_notify = async {
+                let Some(mut receiver) = SATELLITES_1.receiver() else {
+                    error!("No satellites_1 receiver slot available");
+                    return;
+                };
+                loop {
+                    let data = receiver.changed().await;
+                    if server
+                        .sensor_service
+                        .satellites_1
+                        .notify(&conn, &data)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+
             // Task to send device status on connect (one-shot, then watches for changes)
             let status_notify = async {
                 let Some(mut receiver) = DEVICE_STATUS.receiver() else {
@@ -508,12 +548,17 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             };
 
-            embassy_futures::select::select5(
-                gatt_events,
-                sensor_notify,
-                led_notify,
-                gps_notify,
-                status_notify,
+            // Run all notification tasks - any one completing/failing will end the connection
+            // Use nested selects since select only supports up to 5 futures
+            embassy_futures::select::select(
+                embassy_futures::select::select5(
+                    gatt_events,
+                    sensor_notify,
+                    led_notify,
+                    gps_notify,
+                    status_notify,
+                ),
+                embassy_futures::select::select(satellites_0_notify, satellites_1_notify),
             )
             .await;
 

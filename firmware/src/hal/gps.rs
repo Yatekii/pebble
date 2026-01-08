@@ -113,6 +113,8 @@ impl<'d> Gps<'d> {
 
     /// Convert nmea state to GpsData
     fn to_gps_data(&self) -> GpsData {
+        use nmea::sentences::GnssType as NmeaGnssType;
+
         let fix_quality = match self.nmea.fix_type {
             Some(NmeaFixType::Invalid) | None => FixQuality::Invalid,
             Some(NmeaFixType::Gps) => FixQuality::GpsFix,
@@ -134,15 +136,36 @@ impl<'d> Gps<'d> {
             FixType::NoFix
         };
 
+        // Get satellites from GSV data
+        let nmea_sats = self.nmea.satellites();
+        let satellites_in_view = nmea_sats.len().min(MAX_SATELLITES) as u8;
+
+        // Convert satellite info
+        let mut satellites_info = [SatelliteInfo::default(); MAX_SATELLITES];
+        for (i, sat) in nmea_sats.iter().take(MAX_SATELLITES).enumerate() {
+            let gnss_type = match sat.gnss_type() {
+                NmeaGnssType::Gps => GnssType::Gps,
+                NmeaGnssType::Glonass => GnssType::Glonass,
+                NmeaGnssType::Galileo => GnssType::Galileo,
+                NmeaGnssType::Beidou => GnssType::BeiDou,
+                NmeaGnssType::Qzss => GnssType::Qzss,
+                NmeaGnssType::NavIC => GnssType::Unknown,
+            };
+            satellites_info[i] = SatelliteInfo {
+                gnss_type,
+                prn: sat.prn() as u8,
+                elevation: sat.elevation().unwrap_or(0.0) as u8,
+                azimuth: sat.azimuth().unwrap_or(0.0) as u16,
+                snr: sat.snr().unwrap_or(0.0) as u8,
+            };
+        }
+
         // Use satellites in view if no fix satellites reported
         let satellites = self
             .nmea
             .num_of_fix_satellites
             .map(|n| n as u8)
-            .unwrap_or_else(|| {
-                // Count satellites from GSV data
-                self.nmea.satellites().len() as u8
-            });
+            .unwrap_or(satellites_in_view);
 
         GpsData {
             position: Position {
@@ -175,6 +198,8 @@ impl<'d> Gps<'d> {
             speed_knots: self.nmea.speed_over_ground.unwrap_or(0.0),
             course: self.nmea.true_course.unwrap_or(0.0),
             fix_type,
+            satellites_info,
+            satellites_in_view,
         }
     }
 }
@@ -259,6 +284,67 @@ pub fn init(
 
     defmt::info!("GPS: saving config to flash");
     let _ = embedded_io::Write::write_all(&mut uart, &cfg_cfg);
+
+    // Small delay
+    for _ in 0..100000 {
+        core::hint::spin_loop();
+    }
+
+    // Configure GNSS systems via CFG-GNSS (0x06 0x3E)
+    // Enable GPS + Galileo + BeiDou (3 concurrent max on MAX-M8Q)
+    // Message structure:
+    //   - msgVer: 0
+    //   - numTrkChHw: 0 (read-only, will be ignored)
+    //   - numTrkChUse: 0xFF (use all available channels)
+    //   - numConfigBlocks: 5 (one per GNSS system we configure)
+    //   - Per block: gnssId (1), resTrkCh (1), maxTrkCh (1), reserved (1), flags (4)
+    // Total: 2 sync + 2 class/id + 2 length + 4 header + 5*8 blocks + 2 checksum = 52 bytes
+    #[rustfmt::skip]
+    let mut cfg_gnss: [u8; 52] = [
+        0xB5, 0x62,             // Sync
+        0x06, 0x3E,             // Class/ID: CFG-GNSS
+        0x2C, 0x00,             // Length: 44 bytes (4 header + 5*8 blocks = 44)
+        // Header
+        0x00,                   // msgVer
+        0x00,                   // numTrkChHw (read-only)
+        0xFF,                   // numTrkChUse (use all)
+        0x05,                   // numConfigBlocks (5 systems)
+        // GPS (gnssId=0): Enable with 8-16 channels
+        0x00, 0x08, 0x10, 0x00, 0x01, 0x00, 0x01, 0x01,
+        // SBAS (gnssId=1): Disable
+        0x01, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x01,
+        // Galileo (gnssId=2): Enable with 4-8 channels
+        0x02, 0x04, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01,
+        // BeiDou (gnssId=3): Enable with 4-8 channels
+        0x03, 0x04, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01,
+        // QZSS (gnssId=5): Disable
+        0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x01,
+        // Checksum placeholder
+        0x00, 0x00,
+    ];
+    let (ck_a, ck_b) = ubx_checksum(&cfg_gnss[2..50]);
+    cfg_gnss[50] = ck_a;
+    cfg_gnss[51] = ck_b;
+
+    defmt::info!("GPS: enabling GPS + Galileo + BeiDou");
+    let _ = embedded_io::Write::write_all(&mut uart, &cfg_gnss);
+
+    // Small delay
+    for _ in 0..100000 {
+        core::hint::spin_loop();
+    }
+
+    // Save GNSS config to flash
+    let mut cfg_cfg_save: [u8; 21] = [
+        0xB5, 0x62, 0x06, 0x09, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x17, 0x00, 0x00,
+    ];
+    let (ck_a, ck_b) = ubx_checksum(&cfg_cfg_save[2..19]);
+    cfg_cfg_save[19] = ck_a;
+    cfg_cfg_save[20] = ck_b;
+
+    defmt::info!("GPS: saving GNSS config to flash");
+    let _ = embedded_io::Write::write_all(&mut uart, &cfg_cfg_save);
 
     // Poll antenna status
     let cfg_ant_poll: [u8; 8] = [0xB5, 0x62, 0x06, 0x13, 0x00, 0x00, 0x19, 0x51];
@@ -469,6 +555,65 @@ impl UbxParser {
     }
 }
 
+/// GNSS constellation type
+#[derive(Debug, Clone, Copy, Default, Format, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GnssType {
+    #[default]
+    Unknown = 0,
+    Gps = 1,
+    Glonass = 2,
+    Galileo = 3,
+    BeiDou = 4,
+    Qzss = 5,
+    Sbas = 6,
+}
+
+impl GnssType {
+    /// Convert from NMEA talker ID prefix
+    pub fn from_talker(talker: &str) -> Self {
+        match talker {
+            "GP" => GnssType::Gps,
+            "GL" => GnssType::Glonass,
+            "GA" => GnssType::Galileo,
+            "GB" | "BD" => GnssType::BeiDou,
+            "GQ" | "QZ" => GnssType::Qzss,
+            "GN" => GnssType::Unknown, // Combined, need to check PRN
+            _ => GnssType::Unknown,
+        }
+    }
+
+    /// Infer GNSS type from PRN number (for GN combined sentences)
+    pub fn from_prn(prn: u8) -> Self {
+        match prn {
+            1..=32 => GnssType::Gps,
+            33..=64 => GnssType::Sbas,
+            65..=96 => GnssType::Glonass,
+            // Galileo PRNs in NMEA are typically 1-36 but with GA prefix
+            // BeiDou PRNs in NMEA are typically 1-37 but with GB prefix
+            _ => GnssType::Unknown,
+        }
+    }
+}
+
+/// Individual satellite information
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SatelliteInfo {
+    /// GNSS constellation type
+    pub gnss_type: GnssType,
+    /// Satellite PRN/ID number
+    pub prn: u8,
+    /// Elevation in degrees (0-90)
+    pub elevation: u8,
+    /// Azimuth in degrees (0-359)
+    pub azimuth: u16,
+    /// Signal-to-noise ratio in dB-Hz (0-99, 0 = not tracked)
+    pub snr: u8,
+}
+
+/// Maximum number of satellites we track
+pub const MAX_SATELLITES: usize = 24;
+
 /// GPS fix quality
 #[derive(Debug, Clone, Copy, Default, Format, PartialEq, Eq)]
 pub enum FixQuality {
@@ -536,6 +681,10 @@ pub struct GpsData {
     pub speed_knots: f32,
     pub course: f32,
     pub fix_type: FixType,
+    /// Satellites in view with their details
+    pub satellites_info: [SatelliteInfo; MAX_SATELLITES],
+    /// Number of valid entries in satellites_info
+    pub satellites_in_view: u8,
 }
 
 /// Calculate UBX protocol checksum (8-bit Fletcher)

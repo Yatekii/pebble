@@ -62,6 +62,16 @@ const DEVICE_STATUS_UUID: Uuid = Uuid::from_bytes([
     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfb,
 ]);
 
+/// UUID for satellite info chunk 0 (satellites 0-11)
+const SATELLITES_0_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfc,
+]);
+
+/// UUID for satellite info chunk 1 (satellites 12-23)
+const SATELLITES_1_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfd,
+]);
+
 /// BLE connection state
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectionState {
@@ -96,6 +106,99 @@ pub struct GpsReading {
     #[allow(dead_code)]
     pub fix_quality: u8,
     pub has_fix: bool,
+}
+
+/// GNSS constellation type
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GnssType {
+    #[default]
+    Unknown = 0,
+    Gps = 1,
+    Glonass = 2,
+    Galileo = 3,
+    BeiDou = 4,
+    Qzss = 5,
+    Sbas = 6,
+}
+
+impl GnssType {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => GnssType::Gps,
+            2 => GnssType::Glonass,
+            3 => GnssType::Galileo,
+            4 => GnssType::BeiDou,
+            5 => GnssType::Qzss,
+            6 => GnssType::Sbas,
+            _ => GnssType::Unknown,
+        }
+    }
+
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            GnssType::Unknown => "??",
+            GnssType::Gps => "GP",
+            GnssType::Glonass => "GL",
+            GnssType::Galileo => "GA",
+            GnssType::BeiDou => "BD",
+            GnssType::Qzss => "QZ",
+            GnssType::Sbas => "SB",
+        }
+    }
+}
+
+/// Individual satellite info
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SatelliteInfo {
+    /// GNSS constellation type
+    pub gnss_type: GnssType,
+    /// Satellite PRN/ID
+    pub prn: u8,
+    /// Elevation in degrees (0-90)
+    pub elevation: u8,
+    /// Azimuth in degrees (0-359)
+    pub azimuth: u16,
+    /// Signal-to-noise ratio in dB-Hz (0-99)
+    pub snr: u8,
+}
+
+/// Maximum satellites we track
+pub const MAX_SATELLITES: usize = 24;
+
+/// All satellite data
+#[derive(Clone, Debug, Default)]
+pub struct SatelliteData {
+    pub satellites: Vec<SatelliteInfo>,
+}
+
+impl SatelliteData {
+    /// Parse satellite chunk from BLE data (73 bytes: count + 12 * 6 bytes)
+    pub fn parse_chunk(data: &[u8], chunk_index: u8) -> Vec<SatelliteInfo> {
+        if data.is_empty() {
+            return Vec::new();
+        }
+        let count = data[0] as usize;
+        let mut satellites = Vec::with_capacity(count.min(12));
+
+        for i in 0..count.min(12) {
+            let offset = 1 + i * 6;
+            if offset + 6 > data.len() {
+                break;
+            }
+            satellites.push(SatelliteInfo {
+                gnss_type: GnssType::from_u8(data[offset]),
+                prn: data[offset + 1],
+                elevation: data[offset + 2],
+                azimuth: u16::from_le_bytes([data[offset + 3], data[offset + 4]]),
+                snr: data[offset + 5],
+            });
+        }
+
+        // Adjust PRN display for chunk 1 is handled elsewhere
+        let _ = chunk_index;
+        satellites
+    }
 }
 
 /// Device peripheral status
@@ -196,6 +299,8 @@ pub enum BleMessage {
     LedColorsChunk(u8, [LedColor; 24]),
     /// Device status update
     DeviceStatus(DeviceStatusData),
+    /// Satellite info chunk (0 or 1)
+    SatelliteChunk(u8, Vec<SatelliteInfo>),
 }
 
 /// Shared state between BLE task and UI
@@ -354,6 +459,8 @@ async fn run_ble_client(
         let mag_char = characteristics.iter().find(|c| c.uuid == MAG_DATA_UUID);
         let ahrs_char = characteristics.iter().find(|c| c.uuid == AHRS_DATA_UUID);
         let gps_char = characteristics.iter().find(|c| c.uuid == GPS_DATA_UUID);
+        let sats0_char = characteristics.iter().find(|c| c.uuid == SATELLITES_0_UUID);
+        let sats1_char = characteristics.iter().find(|c| c.uuid == SATELLITES_1_UUID);
         let led0_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_0_UUID);
         let led1_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_1_UUID);
         let led2_char = characteristics.iter().find(|c| c.uuid == LED_COLORS_2_UUID);
@@ -410,6 +517,26 @@ async fn run_ble_client(
             }
         } else {
             eprintln!("GPS characteristic not found!");
+        }
+
+        if let Some(sats0_char) = sats0_char {
+            eprintln!("Subscribing to Satellites0 characteristic...");
+            match device.subscribe(sats0_char).await {
+                Ok(_) => eprintln!("  Subscribed to Satellites0 notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to Satellites0: {:?}", e),
+            }
+        } else {
+            eprintln!("Satellites0 characteristic not found!");
+        }
+
+        if let Some(sats1_char) = sats1_char {
+            eprintln!("Subscribing to Satellites1 characteristic...");
+            match device.subscribe(sats1_char).await {
+                Ok(_) => eprintln!("  Subscribed to Satellites1 notifications"),
+                Err(e) => eprintln!("  Failed to subscribe to Satellites1: {:?}", e),
+            }
+        } else {
+            eprintln!("Satellites1 characteristic not found!");
         }
 
         if let Some(led0_char) = led0_char {
@@ -621,6 +748,18 @@ async fn run_ble_client(
                     );
                     let _ = tx.send(BleMessage::DeviceStatus(status));
                 }
+            } else if notification.uuid == SATELLITES_0_UUID && !notification.value.is_empty() {
+                let satellites = SatelliteData::parse_chunk(&notification.value, 0);
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!("Satellites0 received: {} satellites", satellites.len());
+                }
+                let _ = tx.send(BleMessage::SatelliteChunk(0, satellites));
+            } else if notification.uuid == SATELLITES_1_UUID && !notification.value.is_empty() {
+                let satellites = SatelliteData::parse_chunk(&notification.value, 1);
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!("Satellites1 received: {} satellites", satellites.len());
+                }
+                let _ = tx.send(BleMessage::SatelliteChunk(1, satellites));
             }
         }
 

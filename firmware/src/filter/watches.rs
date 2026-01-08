@@ -23,7 +23,9 @@ use core::sync::atomic::AtomicU8;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::Watch;
 
-use crate::comms::ble::{AccBleData, AhrsBleData, GpsBleData, GyroBleData, MagBleData};
+use crate::comms::ble::{
+    AccBleData, AhrsBleData, GpsBleData, GyroBleData, MagBleData, SatelliteChunk,
+};
 
 // =============================================================================
 // Sensor Data Types
@@ -169,6 +171,12 @@ pub static SENSOR_DATA: Watch<CriticalSectionRawMutex, SensorData, 2> = Watch::n
 
 /// Watch for broadcasting GPS data.
 pub static GPS_DATA: Watch<CriticalSectionRawMutex, GpsBleData, 2> = Watch::new();
+
+/// Watch for broadcasting satellite info chunk 0 (satellites 0-11).
+pub static SATELLITES_0: Watch<CriticalSectionRawMutex, SatelliteChunk, 2> = Watch::new();
+
+/// Watch for broadcasting satellite info chunk 1 (satellites 12-23).
+pub static SATELLITES_1: Watch<CriticalSectionRawMutex, SatelliteChunk, 2> = Watch::new();
 
 // --- Device State (Filter → Control/Comms) ---
 
