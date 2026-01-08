@@ -82,6 +82,20 @@ We build for the ESP32-C6 platform and use probe-rs to flash and debug and defmt
 | TXD0 | TXD0      | Bootloader UART TX         |
 | RXD0 | RXD0      | Bootloader UART RX         |
 
+## Development Environment
+
+This project uses a Nix flake to provide all development dependencies including the Rust toolchain and probe-rs. To enter the development environment:
+
+```bash
+nix develop
+```
+
+This gives you:
+
+- Rust nightly with `riscv32imac-unknown-none-elf` target
+- `probe-rs` for flashing and debugging
+- `rust-analyzer` for IDE support
+
 ## Development Commands
 
 ### Building
@@ -91,7 +105,7 @@ cargo build
 cargo build --release
 ```
 
-### Running
+### Running (flashes to device)
 
 ```bash
 cargo run
@@ -116,6 +130,7 @@ cargo fmt              # Apply formatting
 ## Important Hardware Notes
 
 ### Sensor Orientation
+
 Both sensors are mounted with their Z-axis pointing DOWN (rotated 180° around the X-axis from the world frame).
 
 - **BMI270 (accelerometer/gyroscope)**: Rotated 180° around X-axis + 90° CCW in XY plane. Uses `transform_bmi270()`.
