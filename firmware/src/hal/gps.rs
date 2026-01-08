@@ -11,6 +11,7 @@ use defmt::Format;
 use esp_hal::Blocking;
 use esp_hal::uart::{Config as UartConfig, RxConfig, TxConfig, Uart};
 use nmea::Nmea;
+use nmea::SentenceType;
 use nmea::sentences::FixType as NmeaFixType;
 
 /// GPS driver using FIFO polling
@@ -49,8 +50,10 @@ impl<'d> Gps<'d> {
             if byte == b'\n' && self.line_pos > 1 {
                 if let Ok(sentence) = core::str::from_utf8(&self.line_buffer[..self.line_pos]) {
                     let sentence = sentence.trim();
+                    // Log raw NMEA for debugging
+                    defmt::debug!("NMEA: {}", sentence);
                     if let Err(e) = self.nmea.parse(sentence) {
-                        defmt::trace!("NMEA parse error: {:?}", defmt::Debug2Format(&e));
+                        defmt::warn!("NMEA parse error: {:?}", defmt::Debug2Format(&e));
                     } else {
                         result = Some(self.to_gps_data());
                     }
@@ -90,13 +93,23 @@ impl<'d> Gps<'d> {
             FixType::NoFix
         };
 
+        // Use satellites in view if no fix satellites reported
+        let satellites = self
+            .nmea
+            .num_of_fix_satellites
+            .map(|n| n as u8)
+            .unwrap_or_else(|| {
+                // Count satellites from GSV data
+                self.nmea.satellites().len() as u8
+            });
+
         GpsData {
             position: Position {
                 latitude: self.nmea.latitude.map(|l| l as f32).unwrap_or(0.0),
                 longitude: self.nmea.longitude.map(|l| l as f32).unwrap_or(0.0),
                 altitude: self.nmea.altitude.unwrap_or(0.0),
                 fix_quality,
-                satellites: self.nmea.num_of_fix_satellites.unwrap_or(0) as u8,
+                satellites,
                 hdop: self.nmea.hdop.unwrap_or(99.9),
             },
             time: self
@@ -191,9 +204,20 @@ pub fn init(
 
     defmt::info!("GPS: init complete");
 
+    // Create NMEA parser with required sentence types enabled
+    let nmea = Nmea::create_for_navigation(&[
+        SentenceType::GGA, // Position fix data
+        SentenceType::GSA, // DOP and active satellites
+        SentenceType::GSV, // Satellites in view
+        SentenceType::RMC, // Recommended minimum data
+        SentenceType::VTG, // Course over ground
+        SentenceType::GLL, // Geographic position
+    ])
+    .unwrap_or_default();
+
     Ok(Gps {
         _uart: uart,
-        nmea: Nmea::default(),
+        nmea,
         ubx_parser: UbxParser::new(),
         line_buffer: [0; 128],
         line_pos: 0,
