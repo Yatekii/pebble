@@ -57,9 +57,18 @@ impl<'d> Gps<'d> {
                     let sentence = sentence.trim();
                     // Only parse if it looks like a valid NMEA sentence
                     if sentence.starts_with('$') && sentence.len() > 6 {
-                        if let Err(e) = self.nmea.parse(sentence) {
-                            defmt::warn!(
-                                "NMEA parse error for '{}': {:?}",
+                        // Skip GSV sentences with 0 satellites - nmea crate can't parse them
+                        // Format: $G?GSV,1,1,00*XX means "0 satellites in view"
+                        let is_empty_gsv = sentence.len() > 10
+                            && &sentence[3..6] == "GSV"
+                            && sentence.contains(",1,1,00*");
+
+                        if is_empty_gsv {
+                            // Valid but empty GSV, skip silently
+                        } else if let Err(e) = self.nmea.parse(sentence) {
+                            // Only log at debug level - many sentences are expected to fail
+                            defmt::debug!(
+                                "NMEA parse: '{}': {:?}",
                                 sentence,
                                 defmt::Debug2Format(&e)
                             );
