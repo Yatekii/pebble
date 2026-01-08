@@ -36,26 +36,36 @@ impl<'d> Gps<'d> {
             // Try UBX parsing for binary responses
             self.ubx_parser.process(byte);
 
-            // Buffer NMEA sentences
+            // Buffer NMEA sentences - start fresh when we see '$'
             if byte == b'$' {
                 self.line_pos = 0;
+                self.line_buffer[0] = byte;
+                self.line_pos = 1;
+                continue;
             }
 
-            if self.line_pos < self.line_buffer.len() {
+            // Only buffer if we've seen a '$' start
+            if self.line_pos > 0 && self.line_pos < self.line_buffer.len() {
                 self.line_buffer[self.line_pos] = byte;
                 self.line_pos += 1;
             }
 
             // Check for end of NMEA sentence
-            if byte == b'\n' && self.line_pos > 1 {
+            if byte == b'\n' && self.line_pos > 6 {
+                // Minimum valid NMEA: "$GPXXX" + CR + LF = 8 chars
                 if let Ok(sentence) = core::str::from_utf8(&self.line_buffer[..self.line_pos]) {
                     let sentence = sentence.trim();
-                    // Log raw NMEA for debugging
-                    defmt::debug!("NMEA: {}", sentence);
-                    if let Err(e) = self.nmea.parse(sentence) {
-                        defmt::warn!("NMEA parse error: {:?}", defmt::Debug2Format(&e));
-                    } else {
-                        result = Some(self.to_gps_data());
+                    // Only parse if it looks like a valid NMEA sentence
+                    if sentence.starts_with('$') && sentence.len() > 6 {
+                        if let Err(e) = self.nmea.parse(sentence) {
+                            defmt::warn!(
+                                "NMEA parse error for '{}': {:?}",
+                                sentence,
+                                defmt::Debug2Format(&e)
+                            );
+                        } else {
+                            result = Some(self.to_gps_data());
+                        }
                     }
                 }
                 self.line_pos = 0;

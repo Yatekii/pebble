@@ -255,10 +255,16 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Broadcast device status and set initial BLE characteristic value
     DEVICE_STATUS.sender().send(device_status);
-    let _ = server
+    let status_bytes = device_status.to_bytes();
+    info!("Device status bytes: {:?}", &status_bytes[..10]);
+    match server
         .sensor_service
         .device_status
-        .set(server, &device_status.to_bytes());
+        .set(server, &status_bytes)
+    {
+        Ok(_) => info!("Device status characteristic set successfully"),
+        Err(_e) => error!("Failed to set device status characteristic"),
+    }
     info!(
         "Device status broadcast: LEDs={}, GPS={}, Servo={}, IMU={}, Mag={}",
         device_status.leds.to_bytes().0,
