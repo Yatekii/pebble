@@ -8,7 +8,7 @@ use uom::si::f32::MagneticFluxDensity;
 use uom::si::magnetic_flux_density::microtesla;
 
 use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
-use crate::filter::ahrs::{AhrsFilter, MagCalibration};
+use crate::filter::ahrs::{AhrsFilter, GyroCalibration};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::SharedBmm350;
 use crate::math::{correct_centripetal, transform_bmm350};
@@ -31,7 +31,7 @@ where
 {
     let mut ahrs = AhrsFilter::new();
     let mut sample_count: u32 = 0;
-    let mut mag_cal = MagCalibration::new();
+    let mut gyro_cal = GyroCalibration::new();
 
     let Some(magnetometer) = magnetometer else {
         return;
@@ -63,9 +63,6 @@ where
             z: (z_ut * 100.0) as i32,
         };
 
-        // Update hard iron calibration with raw values
-        mag_cal.update(x_ut, y_ut, z_ut);
-
         // Need IMU data for AHRS - skip if not available
         let Ok(imu_data) = &imu_result else {
             continue;
@@ -73,7 +70,28 @@ where
 
         // Convert to physical units and rotate for PCB orientation
         let acceleration_corrected = imu_data.acceleration();
-        let angular_velocity_corrected = imu_data.angular_velocity();
+        let angular_velocity_raw = imu_data.angular_velocity();
+
+        // Update gyro calibration during warmup (device should be stationary)
+        if !gyro_cal.is_ready() {
+            gyro_cal.update(
+                angular_velocity_raw.x.value,
+                angular_velocity_raw.y.value,
+                angular_velocity_raw.z.value,
+            );
+        }
+
+        // Apply gyroscope bias correction
+        let (gx, gy, gz) = gyro_cal.apply(
+            angular_velocity_raw.x.value,
+            angular_velocity_raw.y.value,
+            angular_velocity_raw.z.value,
+        );
+        let angular_velocity_corrected = Vector3::new(
+            uom::si::f32::AngularVelocity::new::<uom::si::angular_velocity::radian_per_second>(gx),
+            uom::si::f32::AngularVelocity::new::<uom::si::angular_velocity::radian_per_second>(gy),
+            uom::si::f32::AngularVelocity::new::<uom::si::angular_velocity::radian_per_second>(gz),
+        );
 
         // Correct for centripetal acceleration
         let acceleration = correct_centripetal(
@@ -82,16 +100,14 @@ where
             IMU_OFFSET,
         );
 
-        // Only run AHRS once magnetometer calibration has enough samples
-        // to avoid division by zero from near-zero calibrated values
-        let orientation = if mag_cal.is_ready() {
-            // Apply hard iron calibration
-            let (x_cal, y_cal, z_cal) = mag_cal.apply(x_ut, y_ut, z_ut);
+        // Only run AHRS once gyro calibration is ready
+        let orientation = if gyro_cal.is_ready() {
+            // Transform magnetometer to world frame (Z points down on PCB, so flip it)
+            // Skip hard iron calibration - it requires rotation through all orientations
+            // which we don't have during static warmup
+            let mag_transformed = transform_bmm350(Vector3::new(x_ut, y_ut, z_ut));
 
-            // Transform to world frame (Z points down on PCB, so flip it)
-            let mag_transformed = transform_bmm350(Vector3::new(x_cal, y_cal, z_cal));
-
-            // Create calibrated magnetic field vector for AHRS
+            // Create magnetic field vector for AHRS
             let mag_calibrated = mag_transformed.map(|v| MagneticFluxDensity::new::<microtesla>(v));
 
             // Update AHRS filter - this fuses accel, gyro, and mag for stable orientation
@@ -107,14 +123,9 @@ where
         // Log periodically (every 50 samples = 1 second at 50Hz)
         sample_count += 1;
         if sample_count % 50 == 0 {
-            let (x_off, y_off) = mag_cal.offsets();
             info!(
-                "AHRS: yaw/heading={} roll={} pitch={} (mag_cal: x_off={} y_off={})",
-                heading,
-                orientation.roll as i32,
-                orientation.pitch as i32,
-                x_off as i32,
-                y_off as i32
+                "AHRS: heading={} roll={} pitch={}",
+                heading, orientation.roll as i32, orientation.pitch as i32
             );
         }
 

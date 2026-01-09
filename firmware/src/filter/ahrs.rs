@@ -30,6 +30,7 @@ const SAMPLE_PERIOD: f32 = 0.02;
 /// Higher values = faster convergence but more noise.
 /// Lower values = smoother but slower response.
 /// Typical range: 0.01 - 0.5.
+/// Using 0.1 for smooth output with gyro bias correction.
 const BETA: f32 = 0.1;
 
 /// Orientation output from AHRS.
@@ -132,11 +133,107 @@ impl Default for AhrsFilter {
     }
 }
 
+/// Gyroscope bias calibration state.
+///
+/// Computes the average gyroscope reading over a warmup period while
+/// the device is stationary. This bias is then subtracted from all
+/// subsequent readings to eliminate drift.
+pub struct GyroCalibration {
+    x_sum: f32,
+    y_sum: f32,
+    z_sum: f32,
+    sample_count: u32,
+    x_bias: f32,
+    y_bias: f32,
+    z_bias: f32,
+    calibrated: bool,
+}
+
+/// Number of samples to collect for gyroscope bias calibration.
+/// At 50Hz, 200 samples = 4 seconds of warmup.
+/// More samples = more accurate bias estimate, but longer warmup time.
+const GYRO_CALIBRATION_SAMPLES: u32 = 200;
+
+impl GyroCalibration {
+    /// Create a new gyroscope calibration state.
+    pub fn new() -> Self {
+        Self {
+            x_sum: 0.0,
+            y_sum: 0.0,
+            z_sum: 0.0,
+            sample_count: 0,
+            x_bias: 0.0,
+            y_bias: 0.0,
+            z_bias: 0.0,
+            calibrated: false,
+        }
+    }
+
+    /// Returns true if calibration is complete.
+    pub fn is_ready(&self) -> bool {
+        self.calibrated
+    }
+
+    /// Update calibration with a new gyroscope reading.
+    ///
+    /// During the warmup period, readings are accumulated to compute
+    /// the average bias. The device should be stationary during this time.
+    pub fn update(&mut self, x: f32, y: f32, z: f32) {
+        if self.calibrated {
+            return;
+        }
+
+        self.x_sum += x;
+        self.y_sum += y;
+        self.z_sum += z;
+        self.sample_count += 1;
+
+        if self.sample_count >= GYRO_CALIBRATION_SAMPLES {
+            let n = self.sample_count as f32;
+            self.x_bias = self.x_sum / n;
+            self.y_bias = self.y_sum / n;
+            self.z_bias = self.z_sum / n;
+            self.calibrated = true;
+        }
+    }
+
+    /// Apply bias correction to a gyroscope reading.
+    ///
+    /// Subtracts the computed bias from each axis.
+    ///
+    /// # Returns
+    ///
+    /// Bias-corrected (x, y, z) values.
+    pub fn apply(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+        (x - self.x_bias, y - self.y_bias, z - self.z_bias)
+    }
+
+    /// Get the current bias values for logging (in mrad/s as i32).
+    pub fn bias(&self) -> (i32, i32, i32) {
+        (
+            (self.x_bias * 1000.0) as i32,
+            (self.y_bias * 1000.0) as i32,
+            (self.z_bias * 1000.0) as i32,
+        )
+    }
+}
+
+impl Default for GyroCalibration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Hard iron calibration state for magnetometer.
 ///
 /// Tracks min/max values on each axis to compute hard iron offsets.
 /// Hard iron distortion is caused by permanent magnets or magnetized
 /// materials near the sensor.
+///
+/// Note: Currently unused because proper hard iron calibration requires
+/// rotating the device through all orientations, which we don't have
+/// during static warmup. Kept for potential future use.
+#[allow(dead_code)]
 pub struct MagCalibration {
     x_min: f32,
     x_max: f32,
