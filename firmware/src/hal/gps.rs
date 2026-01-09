@@ -296,35 +296,39 @@ pub fn init(
     //   - msgVer: 0
     //   - numTrkChHw: 0 (read-only, will be ignored)
     //   - numTrkChUse: 0xFF (use all available channels)
-    //   - numConfigBlocks: 5 (one per GNSS system we configure)
+    //   - numConfigBlocks: 7 (must match what module reports)
     //   - Per block: gnssId (1), resTrkCh (1), maxTrkCh (1), reserved (1), flags (4)
-    // Total: 2 sync + 2 class/id + 2 length + 4 header + 5*8 blocks + 2 checksum = 52 bytes
+    // Total: 2 sync + 2 class/id + 2 length + 4 header + 7*8 blocks + 2 checksum = 68 bytes
     #[rustfmt::skip]
-    let mut cfg_gnss: [u8; 52] = [
+    let mut cfg_gnss: [u8; 68] = [
         0xB5, 0x62,             // Sync
         0x06, 0x3E,             // Class/ID: CFG-GNSS
-        0x2C, 0x00,             // Length: 44 bytes (4 header + 5*8 blocks = 44)
+        0x3C, 0x00,             // Length: 60 bytes (4 header + 7*8 blocks = 60)
         // Header
         0x00,                   // msgVer
         0x00,                   // numTrkChHw (read-only)
         0xFF,                   // numTrkChUse (use all)
-        0x05,                   // numConfigBlocks (5 systems)
+        0x07,                   // numConfigBlocks (7 systems)
         // GPS (gnssId=0): Enable with 8-16 channels
         0x00, 0x08, 0x10, 0x00, 0x01, 0x00, 0x01, 0x01,
         // SBAS (gnssId=1): Disable
         0x01, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x01,
         // Galileo (gnssId=2): Enable with 4-8 channels
         0x02, 0x04, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01,
-        // BeiDou (gnssId=3): Enable with 4-8 channels
-        0x03, 0x04, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01,
+        // BeiDou (gnssId=3): Enable with 8-16 channels
+        0x03, 0x08, 0x10, 0x00, 0x01, 0x00, 0x01, 0x01,
+        // IMES (gnssId=4): Disable
+        0x04, 0x00, 0x08, 0x00, 0x00, 0x00, 0x03, 0x01,
         // QZSS (gnssId=5): Disable
-        0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x01,
+        0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x05, 0x01,
+        // GLONASS (gnssId=6): Disable (to make room for Galileo+BeiDou)
+        0x06, 0x08, 0x0E, 0x00, 0x00, 0x00, 0x01, 0x01,
         // Checksum placeholder
         0x00, 0x00,
     ];
-    let (ck_a, ck_b) = ubx_checksum(&cfg_gnss[2..50]);
-    cfg_gnss[50] = ck_a;
-    cfg_gnss[51] = ck_b;
+    let (ck_a, ck_b) = ubx_checksum(&cfg_gnss[2..66]);
+    cfg_gnss[66] = ck_a;
+    cfg_gnss[67] = ck_b;
 
     defmt::info!("GPS: enabling GPS + Galileo + BeiDou");
     let _ = embedded_io::Write::write_all(&mut uart, &cfg_gnss);
