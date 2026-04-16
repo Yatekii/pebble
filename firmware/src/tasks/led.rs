@@ -4,9 +4,11 @@
 //! and updates the LED ring accordingly.
 
 use defmt::{error, info};
+use embassy_futures::select::{Either3, select3};
+use embassy_time::{Duration, Timer};
 
 use crate::hal::led::{Color, LedStrip, NUM_LEDS};
-use crate::state::{COMPASS_HEADING, LED_COLORS_0, LED_COLORS_1, LED_COLORS_2, LED_COMMAND};
+use crate::state::{COMPASS_HEADING, DOUBLE_TAP_EVENT, LED_COLORS_0, LED_COLORS_1, LED_COLORS_2, LED_COMMAND, TAP_EVENT};
 
 /// Special LED index values.
 const LED_INDEX_BRIGHTNESS_ONLY: u8 = 0xFE;
@@ -103,9 +105,8 @@ fn apply_color_chunk(leds: &mut LedStrip<'_>, colors: &[u8; 72], start_led: usiz
 
 /// Run the LED compass display task.
 ///
-/// Shows a compass indicator pointing to north by subscribing
-/// to the compass heading watch. The LED at the heading position
-/// is lit red.
+/// Shows a compass indicator pointing to north and flashes the ring on
+/// tap events: once for a single tap, twice for a double tap.
 pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
     let Some(leds) = leds.as_mut() else {
         info!("LED compass task disabled (no LED hardware)");
@@ -120,6 +121,18 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
             embassy_futures::yield_now().await;
         }
     };
+    let Some(mut tap_receiver) = TAP_EVENT.receiver() else {
+        error!("No TAP_EVENT receiver slot available");
+        loop {
+            embassy_futures::yield_now().await;
+        }
+    };
+    let Some(mut double_tap_receiver) = DOUBLE_TAP_EVENT.receiver() else {
+        error!("No DOUBLE_TAP_EVENT receiver slot available");
+        loop {
+            embassy_futures::yield_now().await;
+        }
+    };
 
     // Initialize compass display
     leds.set_brightness(64);
@@ -128,21 +141,58 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
 
     info!("LED compass task started");
 
+    let mut compass_led: usize = 0;
+
     loop {
-        let heading = heading_receiver.changed().await;
+        match select3(
+            heading_receiver.changed(),
+            tap_receiver.changed(),
+            double_tap_receiver.changed(),
+        )
+        .await
+        {
+            Either3::First(heading) => {
+                // Heading is CW from north. LED ring is numbered CCW (increasing index = CCW).
+                // heading=0 → index 71 (LED 72, front), heading=90 → index 17 (LED 18, left side).
+                compass_led = (NUM_LEDS - 1 + heading as usize * NUM_LEDS / 360) % NUM_LEDS;
+                leds.clear();
+                leds.set(compass_led, Color::red());
+                if let Err(_e) = leds.show() {
+                    error!("Failed to update compass LEDs");
+                }
+            }
 
-        // Heading is CW from north. LED ring is numbered CCW (increasing index = CCW).
-        // LED 72 (index 71) is at board +X. When device rotates CW by h°, north indicator
-        // must move CCW by h° on the ring to stay pointing at geographic north.
-        // heading=0 → index 71 (LED 72, front), heading=90 → index 17 (LED 18, left side).
-        let led_index = (NUM_LEDS - 1 + heading as usize * NUM_LEDS / 360) % NUM_LEDS;
+            Either3::Second(_) => {
+                flash(leds, 1).await;
+                restore_compass(leds, compass_led);
+            }
 
-        // Clear all and light the north indicator
-        leds.clear();
-        leds.set(led_index, Color::red());
-
-        if let Err(_e) = leds.show() {
-            error!("Failed to update compass LEDs");
+            Either3::Third(_) => {
+                flash(leds, 2).await;
+                restore_compass(leds, compass_led);
+            }
         }
     }
+}
+
+/// Flash all LEDs white `times` times, with 80 ms on / 80 ms off per flash.
+async fn flash(leds: &mut LedStrip<'_>, times: u8) {
+    for _ in 0..times {
+        leds.set_brightness(80);
+        leds.set_all(Color::white());
+        let _ = leds.show();
+        Timer::after(Duration::from_millis(80)).await;
+
+        leds.clear();
+        let _ = leds.show();
+        Timer::after(Duration::from_millis(80)).await;
+    }
+}
+
+/// Restore the single compass LED after a flash.
+fn restore_compass(leds: &mut LedStrip<'_>, compass_led: usize) {
+    leds.set_brightness(64);
+    leds.clear();
+    leds.set(compass_led, Color::red());
+    let _ = leds.show();
 }
