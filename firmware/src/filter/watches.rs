@@ -183,6 +183,11 @@ pub static SATELLITES_1: Watch<CriticalSectionRawMutex, SatelliteChunk, 2> = Wat
 /// Compass heading in degrees (0-359), broadcast from filter to LED task.
 pub static COMPASS_HEADING: Watch<CriticalSectionRawMutex, u16, 2> = Watch::new();
 
+/// Tap/knock event counter. Increments by one on each confirmed tap.
+///
+/// Receivers detect a tap by observing the counter change.
+pub static TAP_EVENT: Watch<CriticalSectionRawMutex, u32, 2> = Watch::new();
+
 // --- Commands (Control/Comms → HAL) ---
 
 /// Watch for LED commands from BLE or control layer.

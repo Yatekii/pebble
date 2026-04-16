@@ -10,7 +10,7 @@ use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::{RAW_LSB_TO_UT_XY, RAW_LSB_TO_UT_Z, SharedBmm350};
 use crate::math::{BMI270_TO_BOARD, BMM350_TO_BOARD};
-use crate::state::{COMPASS_HEADING, SENSOR_DATA, SensorData};
+use crate::state::{COMPASS_HEADING, SENSOR_DATA, SensorData, TAP_EVENT};
 
 /// Sample period in milliseconds (100Hz = 10ms).
 const SAMPLE_PERIOD_MS: u64 = 10;
@@ -46,6 +46,99 @@ const MAG_SOFT_IRON: [[f32; 3]; 3] = [
     [-0.00179177, -0.00748462, 1.01976655],
 ];
 
+// =============================================================================
+// Tap detection
+// =============================================================================
+
+/// Squared acceleration threshold for tap detection (raw LSB²).
+///
+/// 2.5 g × 4096 LSB/g = 10 240 LSB  →  10 240² = 104 857 600.
+/// Values above this magnitude are treated as the start of a tap impulse.
+const TAP_THRESHOLD_SQ: u32 = 10_240 * 10_240;
+
+/// Maximum number of samples (at 100 Hz) that the spike may last.
+///
+/// A genuine knock resolves within ~100 ms (10 ticks). Sustained motion
+/// (picking up the box, shaking) stays above the threshold longer and is
+/// rejected.
+const TAP_PEAK_MAX_TICKS: u8 = 10;
+
+/// Debounce period in samples after a confirmed tap.
+///
+/// 50 samples × 10 ms = 500 ms.  Prevents retriggering on the ring-down
+/// vibration that follows a hard knock.
+const TAP_COOLDOWN_TICKS: u8 = 50;
+
+/// Software tap detector state machine.
+struct TapDetector {
+    state: TapState,
+    /// Monotonically-increasing counter, incremented on each confirmed tap.
+    /// Receivers detect a new tap by observing the counter change.
+    tap_count: u32,
+}
+
+enum TapState {
+    /// Waiting for an acceleration spike.
+    Idle,
+    /// Above threshold; counting ticks to check for a short impulse.
+    Peak { ticks: u8 },
+    /// Confirmed tap — waiting out the debounce window.
+    Cooldown { remaining: u8 },
+}
+
+impl TapDetector {
+    fn new() -> Self {
+        Self {
+            state: TapState::Idle,
+            tap_count: 0,
+        }
+    }
+
+    /// Feed one raw-LSB accelerometer sample.
+    ///
+    /// Returns `true` exactly once per confirmed tap.
+    fn update(&mut self, x: i16, y: i16, z: i16) -> bool {
+        // Compute |a|² in raw LSB².  Each term fits in i32; all three fit in u32.
+        let sq = (x as i32 * x as i32) as u32
+            + (y as i32 * y as i32) as u32
+            + (z as i32 * z as i32) as u32;
+        let above = sq > TAP_THRESHOLD_SQ;
+
+        match self.state {
+            TapState::Idle => {
+                if above {
+                    self.state = TapState::Peak { ticks: 0 };
+                }
+                false
+            }
+            TapState::Peak { ref mut ticks } => {
+                if !above {
+                    // Spike ended quickly: valid tap impulse.
+                    self.tap_count = self.tap_count.wrapping_add(1);
+                    self.state = TapState::Cooldown { remaining: TAP_COOLDOWN_TICKS };
+                    true
+                } else {
+                    *ticks += 1;
+                    if *ticks >= TAP_PEAK_MAX_TICKS {
+                        // Sustained motion — not a tap.
+                        self.state = TapState::Idle;
+                    }
+                    false
+                }
+            }
+            TapState::Cooldown { ref mut remaining } => {
+                *remaining -= 1;
+                if *remaining == 0 {
+                    self.state = TapState::Idle;
+                }
+                false
+            }
+        }
+    }
+}
+
+// =============================================================================
+
 /// Run the IMU task.
 ///
 /// Reads IMU and magnetometer data at 100Hz, computes tilt-compensated
@@ -64,6 +157,8 @@ where
     // Accelerometer EMA low-pass filter state.
     // Initialised to a flat-board reading: +1g on board Z (4096 LSB at 8g range).
     let mut acc_lpf = Vector3::new(0.0f32, 0.0, 4096.0);
+
+    let mut tap = TapDetector::new();
 
     loop {
         Timer::after(Duration::from_millis(SAMPLE_PERIOD_MS)).await;
@@ -137,6 +232,13 @@ where
             let acc_raw = BMI270_TO_BOARD
                 * Vector3::new(raw_acc.x as f32, raw_acc.y as f32, raw_acc.z as f32);
             acc_lpf += ACC_LPF_ALPHA * (acc_raw - acc_lpf);
+
+            // Tap detection uses raw (un-LPF'd) data so the short impulse is visible.
+            // Magnitude is rotation-invariant so we skip the board-frame transform.
+            if tap.update(raw_acc.x, raw_acc.y, raw_acc.z) {
+                defmt::info!("tap detected (count={})", tap.tap_count);
+                TAP_EVENT.sender().send(tap.tap_count);
+            }
         }
 
         // Magnetometer processing – a failed read or out-of-range magnitude skips
@@ -197,14 +299,14 @@ where
             );
             let mag_h = r_tilt * mag_board;
 
-            info!(
-                "acc=({},{},{}) pitch={} roll={} board=({},{},{}) h=({},{})",
-                acc_lpf.x as i32, acc_lpf.y as i32, acc_lpf.z as i32,
-                pitch.to_degrees() as i32,
-                roll.to_degrees() as i32,
-                mag_board.x as i32, mag_board.y as i32, mag_board.z as i32,
-                mag_h.x as i32, mag_h.y as i32,
-            );
+            // info!(
+            //     "acc=({},{},{}) pitch={} roll={} board=({},{},{}) h=({},{})",
+            //     acc_lpf.x as i32, acc_lpf.y as i32, acc_lpf.z as i32,
+            //     pitch.to_degrees() as i32,
+            //     roll.to_degrees() as i32,
+            //     mag_board.x as i32, mag_board.y as i32, mag_board.z as i32,
+            //     mag_h.x as i32, mag_h.y as i32,
+            // );
 
             (
                 libm::atan2f(mag_h.y, mag_h.x),
@@ -223,7 +325,7 @@ where
         let heading = heading_deg as u16;
         COMPASS_HEADING.sender().send(heading);
 
-        info!("heading={} |mag|={}", heading, cal_mag as i32);
+        // info!("heading={} |mag|={}", heading, cal_mag as i32);
 
         if let Ok(imu_data) = &imu_result {
             let accelerometer = imu_data.raw_acceleration();
