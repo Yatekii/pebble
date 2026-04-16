@@ -30,15 +30,16 @@ use uom::si::{
 ///
 /// Derivation:
 /// - Board +X = BMM350 −y  (LED 72 is at BMM350 −y)
-/// - Board +Z = BMM350 −z  (chip z into PCB, board z up)
-/// - Board +Y = Board_Z × Board_X = BMM350 −x  (right-hand rule)
-///
-/// This is a 180° rotation around the (X−Y)/√2 axis.
+/// - Board +Z = BMM350 +z  (empirically verified: BMM350 OTP-compensated output reports
+///   +z upward, i.e. the reported sensor frame is effectively left-handed after Bosch's
+///   internal axis remapping, so board +Z = +sensor_z despite chip +z appearing to go
+///   into the PCB by physical inspection)
+/// - Board +Y = Board_Z × Board_X = BMM350 −x  (right-hand rule with above)
 #[rustfmt::skip]
 pub const BMM350_TO_BOARD: Matrix3<f32> = Matrix3::new(
      0.0, -1.0,  0.0,   // board X = −sensor_y
     -1.0,  0.0,  0.0,   // board Y = −sensor_x
-     0.0,  0.0, -1.0,   // board Z = −sensor_z
+     0.0,  0.0,  1.0,   // board Z = +sensor_z  (empirically confirmed, see comment above)
 );
 
 /// Rotation matrix: BMI270 sensor frame → board frame.
