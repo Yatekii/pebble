@@ -178,7 +178,7 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
 /// Flash all LEDs white `times` times, with 80 ms on / 80 ms off per flash.
 async fn flash(leds: &mut LedStrip<'_>, times: u8) {
     for _ in 0..times {
-        leds.set_brightness(80);
+        leds.set_brightness(128); // 128 / 3 ≈ 42 effective → ~1/6 of full scale
         leds.set_all(Color::white());
         let _ = leds.show();
         Timer::after(Duration::from_millis(80)).await;

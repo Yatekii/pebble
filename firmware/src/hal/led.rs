@@ -115,10 +115,13 @@ impl<'a> LedStrip<'a> {
     pub fn show(&mut self) -> Result<(), esp_hal_smartled::LedAdapterError> {
         let iter = self.colors.iter().map(|c| RGB8::from(*c));
 
+        // Cap at 1/3 of the requested brightness to protect eyes at close range.
+        let effective = self.brightness_level / 3;
+
         // Disable interrupts during transmission to prevent timing glitches
         let result = critical_section::with(|_| {
             self.adapter
-                .write(brightness(gamma(iter), self.brightness_level))
+                .write(brightness(gamma(iter), effective))
         });
 
         // Broadcast state for BLE synchronization
