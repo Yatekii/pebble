@@ -76,7 +76,7 @@ impl Puzzle for CompassAlignPuzzle {
                     }))
                 }
             }
-            PuzzleEvent::Tap => None,
+            PuzzleEvent::Tap | PuzzleEvent::DoubleTap => None,
             PuzzleEvent::Timeout => None,
             PuzzleEvent::ExternalCommand(_) => None,
         }

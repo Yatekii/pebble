@@ -11,8 +11,11 @@ pub enum PuzzleEvent {
     /// Device state has been updated (orientation, GPS, etc.).
     DeviceStateChanged(DeviceState),
 
-    /// A tap or knock on the PCB was detected via the accelerometer.
+    /// A single tap/knock on the PCB was detected via the accelerometer.
     Tap,
+
+    /// Two taps in quick succession were detected via the accelerometer.
+    DoubleTap,
 
     /// A timeout occurred (for time-based puzzles).
     Timeout,

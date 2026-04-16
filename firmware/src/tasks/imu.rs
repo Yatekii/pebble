@@ -10,7 +10,7 @@ use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::{RAW_LSB_TO_UT_XY, RAW_LSB_TO_UT_Z, SharedBmm350};
 use crate::math::{BMI270_TO_BOARD, BMM350_TO_BOARD};
-use crate::state::{COMPASS_HEADING, SENSOR_DATA, SensorData, TAP_EVENT};
+use crate::state::{COMPASS_HEADING, DOUBLE_TAP_EVENT, SENSOR_DATA, SensorData, TAP_EVENT};
 
 /// Sample period in milliseconds (100Hz = 10ms).
 const SAMPLE_PERIOD_MS: u64 = 10;
@@ -47,42 +47,63 @@ const MAG_SOFT_IRON: [[f32; 3]; 3] = [
 ];
 
 // =============================================================================
-// Tap detection
+// Tap / double-tap detection
 // =============================================================================
 
 /// Squared acceleration threshold for tap detection (raw LSB²).
 ///
 /// 2.5 g × 4096 LSB/g = 10 240 LSB  →  10 240² = 104 857 600.
-/// Values above this magnitude are treated as the start of a tap impulse.
 const TAP_THRESHOLD_SQ: u32 = 10_240 * 10_240;
 
-/// Maximum number of samples (at 100 Hz) that the spike may last.
+/// Maximum spike duration for a valid tap impulse (samples at 100 Hz).
 ///
 /// A genuine knock resolves within ~100 ms (10 ticks). Sustained motion
-/// (picking up the box, shaking) stays above the threshold longer and is
-/// rejected.
+/// stays above the threshold longer and is rejected as not a tap.
 const TAP_PEAK_MAX_TICKS: u8 = 10;
 
-/// Debounce period in samples after a confirmed tap.
+/// Inter-tap window for double-tap detection (samples at 100 Hz).
 ///
-/// 50 samples × 10 ms = 500 ms.  Prevents retriggering on the ring-down
-/// vibration that follows a hard knock.
+/// After the first tap resolves, wait up to 300 ms (30 ticks) for a second
+/// spike. If none arrives the event is classified as a single tap.
+const TAP_BETWEEN_TICKS: u8 = 30;
+
+/// Debounce period after any confirmed tap event (samples at 100 Hz).
+///
+/// 50 samples × 10 ms = 500 ms.
 const TAP_COOLDOWN_TICKS: u8 = 50;
 
-/// Software tap detector state machine.
+/// Outcome returned by [`TapDetector::update`] each sample.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TapResult {
+    None,
+    Single,
+    Double,
+}
+
+/// Software tap / double-tap detector.
+///
+/// State machine:
+/// ```text
+/// Idle ──[spike]──► Peak1 ──[resolved quickly]──► BetweenTaps ──[spike]──► Peak2 ──[resolved]──► Double + Cooldown
+///                         └─[too long]──► Idle               └─[timeout]──► Single + Cooldown  └─[too long]──► Single + Cooldown
+/// ```
 struct TapDetector {
     state: TapState,
-    /// Monotonically-increasing counter, incremented on each confirmed tap.
-    /// Receivers detect a new tap by observing the counter change.
-    tap_count: u32,
+    /// Incremented on each confirmed single tap.
+    single_count: u32,
+    /// Incremented on each confirmed double tap.
+    double_count: u32,
 }
 
 enum TapState {
-    /// Waiting for an acceleration spike.
     Idle,
-    /// Above threshold; counting ticks to check for a short impulse.
-    Peak { ticks: u8 },
-    /// Confirmed tap — waiting out the debounce window.
+    /// First spike in progress; `ticks` counts samples spent above threshold.
+    Peak1 { ticks: u8 },
+    /// First tap confirmed; waiting to see if a second spike arrives.
+    BetweenTaps { remaining: u8 },
+    /// Second spike in progress.
+    Peak2 { ticks: u8 },
+    /// Waiting out the post-event debounce window.
     Cooldown { remaining: u8 },
 }
 
@@ -90,15 +111,13 @@ impl TapDetector {
     fn new() -> Self {
         Self {
             state: TapState::Idle,
-            tap_count: 0,
+            single_count: 0,
+            double_count: 0,
         }
     }
 
-    /// Feed one raw-LSB accelerometer sample.
-    ///
-    /// Returns `true` exactly once per confirmed tap.
-    fn update(&mut self, x: i16, y: i16, z: i16) -> bool {
-        // Compute |a|² in raw LSB².  Each term fits in i32; all three fit in u32.
+    /// Feed one raw-LSB accelerometer sample. Returns the event (if any).
+    fn update(&mut self, x: i16, y: i16, z: i16) -> TapResult {
         let sq = (x as i32 * x as i32) as u32
             + (y as i32 * y as i32) as u32
             + (z as i32 * z as i32) as u32;
@@ -107,31 +126,68 @@ impl TapDetector {
         match self.state {
             TapState::Idle => {
                 if above {
-                    self.state = TapState::Peak { ticks: 0 };
+                    self.state = TapState::Peak1 { ticks: 0 };
                 }
-                false
+                TapResult::None
             }
-            TapState::Peak { ref mut ticks } => {
+
+            TapState::Peak1 { ref mut ticks } => {
                 if !above {
-                    // Spike ended quickly: valid tap impulse.
-                    self.tap_count = self.tap_count.wrapping_add(1);
-                    self.state = TapState::Cooldown { remaining: TAP_COOLDOWN_TICKS };
-                    true
+                    // Spike resolved quickly → first tap confirmed; open the inter-tap window.
+                    self.state = TapState::BetweenTaps { remaining: TAP_BETWEEN_TICKS };
+                    TapResult::None
                 } else {
                     *ticks += 1;
                     if *ticks >= TAP_PEAK_MAX_TICKS {
-                        // Sustained motion — not a tap.
                         self.state = TapState::Idle;
                     }
-                    false
+                    TapResult::None
                 }
             }
+
+            TapState::BetweenTaps { ref mut remaining } => {
+                if above {
+                    // Second spike started → move to Peak2.
+                    self.state = TapState::Peak2 { ticks: 0 };
+                    TapResult::None
+                } else {
+                    *remaining -= 1;
+                    if *remaining == 0 {
+                        // Window expired with no second tap → single tap.
+                        self.single_count = self.single_count.wrapping_add(1);
+                        self.state = TapState::Cooldown { remaining: TAP_COOLDOWN_TICKS };
+                        TapResult::Single
+                    } else {
+                        TapResult::None
+                    }
+                }
+            }
+
+            TapState::Peak2 { ref mut ticks } => {
+                if !above {
+                    // Second spike resolved → double tap confirmed.
+                    self.double_count = self.double_count.wrapping_add(1);
+                    self.state = TapState::Cooldown { remaining: TAP_COOLDOWN_TICKS };
+                    TapResult::Double
+                } else {
+                    *ticks += 1;
+                    if *ticks >= TAP_PEAK_MAX_TICKS {
+                        // Second spike lasted too long → count only the first tap.
+                        self.single_count = self.single_count.wrapping_add(1);
+                        self.state = TapState::Cooldown { remaining: TAP_COOLDOWN_TICKS };
+                        TapResult::Single
+                    } else {
+                        TapResult::None
+                    }
+                }
+            }
+
             TapState::Cooldown { ref mut remaining } => {
                 *remaining -= 1;
                 if *remaining == 0 {
                     self.state = TapState::Idle;
                 }
-                false
+                TapResult::None
             }
         }
     }
@@ -235,9 +291,16 @@ where
 
             // Tap detection uses raw (un-LPF'd) data so the short impulse is visible.
             // Magnitude is rotation-invariant so we skip the board-frame transform.
-            if tap.update(raw_acc.x, raw_acc.y, raw_acc.z) {
-                defmt::info!("tap detected (count={})", tap.tap_count);
-                TAP_EVENT.sender().send(tap.tap_count);
+            match tap.update(raw_acc.x, raw_acc.y, raw_acc.z) {
+                TapResult::Single => {
+                    defmt::info!("tap: single (count={})", tap.single_count);
+                    TAP_EVENT.sender().send(tap.single_count);
+                }
+                TapResult::Double => {
+                    defmt::info!("tap: double (count={})", tap.double_count);
+                    DOUBLE_TAP_EVENT.sender().send(tap.double_count);
+                }
+                TapResult::None => {}
             }
         }
 
@@ -284,6 +347,16 @@ where
             // Board Z is UP so specific force = +g on Z when flat → atan2(0, +g) = 0 ✓
             let roll = libm::atan2f(acc_lpf.y, acc_lpf.z);
             let pitch = libm::atan2f(-acc_lpf.x, libm::sqrtf(acc_lpf.y * acc_lpf.y + acc_lpf.z * acc_lpf.z));
+
+            // Near ±90° pitch, acc.z → 0 and roll becomes numerically indeterminate
+            // (gimbal lock). Clamp pitch to ±80° and zero roll in that region so the
+            // ill-conditioned roll estimate does not corrupt the heading.
+            const PITCH_LIMIT: f32 = 80.0 * core::f32::consts::PI / 180.0;
+            let (pitch, roll) = if pitch.abs() < PITCH_LIMIT {
+                (pitch, roll)
+            } else {
+                (pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT), 0.0_f32)
+            };
 
             let (sr, cr) = (libm::sinf(roll), libm::cosf(roll));
             let (sp, cp) = (libm::sinf(pitch), libm::cosf(pitch));
