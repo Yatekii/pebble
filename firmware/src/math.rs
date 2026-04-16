@@ -3,36 +3,58 @@
 //! This module provides coordinate transformations, centripetal acceleration
 //! correction, and quaternion-to-Euler angle conversion.
 //!
-//! # Coordinate Systems
+//! # Board Frame Convention
 //!
-//! The PCB has sensors mounted in different orientations:
-//! - BMI270 (IMU): Rotated 90° CCW and Z points down
-//! - BMM350 (Magnetometer): Z points down (no XY rotation)
+//! All sensor readings are transformed into a consistent board frame:
+//! - **+X**: toward LED 72
+//! - **+Y**: toward LED 18 (90° CCW from LED 72, completing the right-hand rule with Z)
+//! - **+Z**: up (out of the PCB surface)
 //!
-//! These transformations convert sensor readings to a consistent world frame
-//! where +X is forward, +Y is left, and +Z is up.
+//! When the board is flat, the accelerometer specific-force reads (0, 0, +g).
+//!
+//! # Sensor Orientations (looking at PCB from above)
+//!
+//! **BMM350**: chip +x toward pin-A row, chip +y toward LED 18 side (away from LED 72),
+//! chip +z into the PCB (downward). LED 72 is at BMM350 −y.
+//!
+//! **BMI270**: pin 1 is at top-right on PCB, so chip +x points in the BMM350 +y direction
+//! (away from LED 72). Chip +z into the PCB (downward).
 
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 use uom::si::{
     acceleration::meter_per_second_squared,
     f32::{Acceleration, AngularVelocity},
 };
 
-/// Transform BMI270 coordinates to world frame.
-/// BMI270 is rotated 90° CCW on PCB and rotated 180° around X-axis (Z points down).
-/// 180° rotation around X-axis: (x, y, z) -> (x, -y, -z)
-/// Then 90° CCW in XY plane: (x, y, z) -> (y, -x, z)
-/// Combined: (x, y, z) -> (-y, -x, -z)
-pub fn transform_bmi270(v: Vector3<f32>) -> Vector3<f32> {
-    Vector3::new(-v.y, -v.x, -v.z)
-}
+/// Rotation matrix: BMM350 sensor frame → board frame.
+///
+/// Derivation:
+/// - Board +X = BMM350 −y  (LED 72 is at BMM350 −y)
+/// - Board +Z = BMM350 −z  (chip z into PCB, board z up)
+/// - Board +Y = Board_Z × Board_X = BMM350 −x  (right-hand rule)
+///
+/// This is a 180° rotation around the (X−Y)/√2 axis.
+#[rustfmt::skip]
+pub const BMM350_TO_BOARD: Matrix3<f32> = Matrix3::new(
+     0.0, -1.0,  0.0,   // board X = −sensor_y
+    -1.0,  0.0,  0.0,   // board Y = −sensor_x
+     0.0,  0.0, -1.0,   // board Z = −sensor_z
+);
 
-/// Transform BMM350 coordinates to world frame.
-/// BMM350 is rotated 180° around X-axis (Z points down, not rotated in XY plane).
-/// 180° rotation around X-axis: (x, y, z) -> (x, -y, -z)
-pub fn transform_bmm350(v: Vector3<f32>) -> Vector3<f32> {
-    Vector3::new(v.x, -v.y, -v.z)
-}
+/// Rotation matrix: BMI270 sensor frame → board frame.
+///
+/// Derivation:
+/// - BMI270 +x = board +X  (chip +x points toward LED 72, verified empirically)
+/// - Board +Z = BMI270 −z  (chip z into PCB, board z up)
+/// - Board +Y = Board_Z × Board_X = BMI270 −y  (right-hand rule)
+///
+/// This is a 180° rotation around the X-axis.
+#[rustfmt::skip]
+pub const BMI270_TO_BOARD: Matrix3<f32> = Matrix3::new(
+     1.0,  0.0,  0.0,   // board X = +sensor_x
+     0.0, -1.0,  0.0,   // board Y = −sensor_y
+     0.0,  0.0, -1.0,   // board Z = −sensor_z
+);
 
 /// Correct accelerometer for sensor offset from center of rotation.
 ///

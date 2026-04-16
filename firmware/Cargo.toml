@@ -1,8 +1,8 @@
 [package]
-edition      = "2024"
-name         = "pebble"
+edition = "2024"
+name = "pebble"
 rust-version = "1.88"
-version      = "0.1.0"
+version = "0.1.0"
 
 [[bin]]
 name = "pebble"
@@ -11,7 +11,7 @@ test = false
 
 [[test]]
 harness = false
-name    = "hello_test"
+name = "hello_test"
 
 [lib]
 test = false
@@ -27,7 +27,7 @@ esp-rtos = { version = "0.2.0", features = [
   "esp32c6",
 ] }
 
-defmt                  = "1.0.1"
+defmt = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32c6"] }
 
 embassy-net = { version = "0.7.1", features = [
@@ -75,19 +75,25 @@ embassy-sync = "0.7.2"
 embassy-futures = "0.1.1"
 
 critical-section = "1.2.0"
-heapless         = "0.9"
-static_cell      = "2.1.1"
+heapless = "0.9"
+static_cell = "2.1.1"
 
 ahrs = { version = "0.6", default-features = false }
 bmi2 = "0.1.1"
-nmea = { version = "0.7", default-features = false, features = ["GNSS"] }
+nmea = { version = "0.7", git = "https://github.com/AeroRust/nmea.git", default-features = false, features = [
+  "GNSS",
+] }
 chrono = { version = "0.4", default-features = false }
 embedded-hal = "1.0.0"
 libm = "0.2"
 nalgebra = { version = "0.31", default-features = false, features = ["libm"] }
 esp-hal-smartled = { version = "0.17.0", features = ["esp32c6"] }
 smart-leds = "0.4.0"
-uom = { version = "0.37", default-features = false, features = ["si", "f32", "autoconvert"] }
+uom = { version = "0.37", default-features = false, features = [
+  "si",
+  "f32",
+  "autoconvert",
+] }
 esp-storage = { version = "0.8", features = ["esp32c6", "defmt"] }
 embedded-storage = "0.3"
 postcard = "1.1"
@@ -100,16 +106,19 @@ embedded-test = { version = "0.7.0", features = [
   "external-executor",
 ] }
 
+[features]
+mag-calibrate = []
+
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
 
 [profile.release]
-codegen-units    = 1     # LLVM can perform better optimizations using a single thread
-debug            = 2
+codegen-units = 1       # LLVM can perform better optimizations using a single thread
+debug = 2
 debug-assertions = true
-incremental      = false
-lto              = 'fat'
-opt-level        = 's'
-overflow-checks  = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false

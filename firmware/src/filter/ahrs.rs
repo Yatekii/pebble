@@ -22,16 +22,16 @@ use uom::si::f32::{Acceleration, AngularVelocity, MagneticFluxDensity};
 
 use crate::math::quaternion_to_euler;
 
-/// Sample period in seconds (50Hz IMU update rate).
-const SAMPLE_PERIOD: f32 = 0.02;
+/// Sample period in seconds (100Hz IMU update rate).
+const SAMPLE_PERIOD: f32 = 0.01;
 
 /// Madgwick filter gain parameter.
 ///
 /// Higher values = faster convergence but more noise.
 /// Lower values = smoother but slower response.
 /// Typical range: 0.01 - 0.5.
-/// Using 0.1 for smooth output with gyro bias correction.
-const BETA: f32 = 0.1;
+/// Using 0.8 to strongly trust magnetometer for heading correction.
+const BETA: f32 = 0.8;
 
 /// Orientation output from AHRS.
 ///
@@ -150,9 +150,9 @@ pub struct GyroCalibration {
 }
 
 /// Number of samples to collect for gyroscope bias calibration.
-/// At 50Hz, 200 samples = 4 seconds of warmup.
+/// At 100Hz, 400 samples = 4 seconds of warmup.
 /// More samples = more accurate bias estimate, but longer warmup time.
-const GYRO_CALIBRATION_SAMPLES: u32 = 200;
+const GYRO_CALIBRATION_SAMPLES: u32 = 400;
 
 impl GyroCalibration {
     /// Create a new gyroscope calibration state.

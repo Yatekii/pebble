@@ -131,9 +131,11 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
     loop {
         let heading = heading_receiver.changed().await;
 
-        // Convert heading (0-359) to LED index (0-71)
-        // LED 0 is at north (0 degrees), LEDs go clockwise
-        let led_index = ((heading as usize * NUM_LEDS) / 360) % NUM_LEDS;
+        // Heading is CW from north. LED ring is numbered CCW (increasing index = CCW).
+        // LED 72 (index 71) is at board +X. When device rotates CW by h°, north indicator
+        // must move CCW by h° on the ring to stay pointing at geographic north.
+        // heading=0 → index 71 (LED 72, front), heading=90 → index 17 (LED 18, left side).
+        let led_index = (NUM_LEDS - 1 + heading as usize * NUM_LEDS / 360) % NUM_LEDS;
 
         // Clear all and light the north indicator
         leds.clear();

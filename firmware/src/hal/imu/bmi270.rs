@@ -8,7 +8,7 @@ use crate::{
         imu::constants::{BMI270_CHIP_ID, BMI270_I2C_ADDR, bmi270_reg},
         peripherals::i2c::{Error, SharedI2c, SharedI2cDevice},
     },
-    math::transform_bmi270,
+    math::BMI270_TO_BOARD,
 };
 
 /// IMU that uses shared I2C bus (for when BMM350 is on the same bus)
@@ -156,10 +156,8 @@ impl ImuData {
         /// BMI270 with 8g range: 1g = 4096 LSB
         const SCALE: f32 = 1.0 / 4096.0;
 
-        transform_bmi270(
-            Vector3::new(self.acc_x as f32, self.acc_y as f32, self.acc_z as f32) * SCALE,
-        )
-        .map(Acceleration::new::<uom::si::acceleration::meter_per_second_squared>)
+        (BMI270_TO_BOARD * Vector3::new(self.acc_x as f32, self.acc_y as f32, self.acc_z as f32) * SCALE)
+            .map(Acceleration::new::<uom::si::acceleration::meter_per_second_squared>)
     }
 
     /// Return the transformed and calibrated gyroscope reading
@@ -167,10 +165,8 @@ impl ImuData {
         /// BMI270 with 2000dps range: 1 dps = 16.384 LSB
         const SCALE: f32 = 1.0 / 16.384;
 
-        transform_bmi270(
-            Vector3::new(self.gyr_x as f32, self.gyr_y as f32, self.gyr_z as f32) * SCALE,
-        )
-        .map(AngularVelocity::new::<uom::si::angular_velocity::degree_per_second>)
+        (BMI270_TO_BOARD * Vector3::new(self.gyr_x as f32, self.gyr_y as f32, self.gyr_z as f32) * SCALE)
+            .map(AngularVelocity::new::<uom::si::angular_velocity::degree_per_second>)
     }
 
     /// Return the raw accelerometer reading

@@ -3,22 +3,32 @@
 use defmt::info;
 use embassy_time::{Duration, Timer};
 use embedded_hal::i2c::I2c;
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 use uom::si::magnetic_flux_density::microtesla;
 
 use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::{RAW_LSB_TO_UT_XY, RAW_LSB_TO_UT_Z, SharedBmm350};
-use crate::math::transform_bmm350;
+use crate::math::{BMI270_TO_BOARD, BMM350_TO_BOARD};
 use crate::state::{COMPASS_HEADING, SENSOR_DATA, SensorData};
 
 /// Sample period in milliseconds (100Hz = 10ms).
 const SAMPLE_PERIOD_MS: u64 = 10;
 
+/// EMA low-pass filter coefficient for the accelerometer used in tilt compensation.
+/// α = 1 − exp(−dt/τ) ≈ dt/τ.  With dt = 10 ms and τ = 50 ms → α ≈ 0.2.
+/// In Switzerland Bv ≈ 43 µT > Bh ≈ 20 µT, so B_board.x is negative when tilted
+/// up until enough pitch compensation kicks in.  With α=0.02 (τ=500ms) that
+/// transition takes ~330 ms and shows heading=180° until it converges.
+/// α=0.2 (τ=50ms) converges in <250ms, fast enough for hand-held use.
+const ACC_LPF_ALPHA: f32 = 0.2;
+
 /// Expected Earth-field magnitude after calibration (µT).
 const MAG_FIELD_CENTER: f32 = 48.5;
 /// Half-width of the acceptance window around `MAG_FIELD_CENTER` (µT).
-const MAG_FIELD_TOLERANCE: f32 = 5.0;
+/// Wide enough to tolerate calibration drift and location variation.
+/// Tighten once the calibration is verified correct.
+const MAG_FIELD_TOLERANCE: f32 = 20.0;
 
 /// When built with `--features mag-calibrate` (done automatically by the
 /// `mag-calibrate` tool), streams raw magnetometer values over RTT so the
@@ -50,6 +60,10 @@ where
     };
 
     let calib_tick: u32 = 0;
+
+    // Accelerometer EMA low-pass filter state.
+    // Initialised to a flat-board reading: +1g on board Z (4096 LSB at 8g range).
+    let mut acc_lpf = Vector3::new(0.0f32, 0.0, 4096.0);
 
     loop {
         Timer::after(Duration::from_millis(SAMPLE_PERIOD_MS)).await;
@@ -115,7 +129,18 @@ where
 
         let mut data = SensorData::default();
 
-        // Process magnetometer first to get calibrated values for AHRS
+        // Always update the accelerometer LPF regardless of magnetometer health.
+        // Transform raw counts to board frame; when flat acc ≈ (0, 0, +g_counts).
+        // The EMA (τ ≈ 500 ms) rejects vibration noise from the tilt estimate.
+        if let Ok(ref imu_data) = imu_result {
+            let raw_acc = imu_data.raw_acceleration();
+            let acc_raw = BMI270_TO_BOARD
+                * Vector3::new(raw_acc.x as f32, raw_acc.y as f32, raw_acc.z as f32);
+            acc_lpf += ACC_LPF_ALPHA * (acc_raw - acc_lpf);
+        }
+
+        // Magnetometer processing – a failed read or out-of-range magnitude skips
+        // only the heading computation, not the acc update above.
         let Ok(mag_data) = &mag_result else {
             continue;
         };
@@ -146,13 +171,51 @@ where
             continue;
         }
 
-        // Transform magnetometer to board frame.
-        // After transform: x=1 points toward LED 72 (board +X), y=1 points toward LED 18.
-        let mag_transformed = transform_bmm350(Vector3::new(x_cal, y_cal, z_cal));
+        // Transform calibrated magnetometer to board frame.
+        // Board frame: +X toward LED 72, +Y toward LED 18, +Z up.
+        let mag_board = BMM350_TO_BOARD * Vector3::new(x_cal, y_cal, z_cal);
 
-        // Flat-plane compass heading from horizontal components only (no IMU/tilt compensation).
-        // atan2(-y, x): heading is CW from north, 0° when LED 72 faces north.
-        let heading_rad = libm::atan2f(-mag_transformed.y, mag_transformed.x);
+        // Tilt-compensated heading using accelerometer.
+        // When the IMU is unavailable, fall back to flat-plane heading.
+        let (heading_rad, roll_deg, pitch_deg) = if imu_result.is_ok() {
+            // Roll (around board X = LED-72 axis) and pitch (around board Y = LED-18 axis).
+            // Board Z is UP so specific force = +g on Z when flat → atan2(0, +g) = 0 ✓
+            let roll = libm::atan2f(acc_lpf.y, acc_lpf.z);
+            let pitch = libm::atan2f(-acc_lpf.x, libm::sqrtf(acc_lpf.y * acc_lpf.y + acc_lpf.z * acc_lpf.z));
+
+            let (sr, cr) = (libm::sinf(roll), libm::cosf(roll));
+            let (sp, cp) = (libm::sinf(pitch), libm::cosf(pitch));
+
+            // R = Rx(roll) * Ry(pitch): intrinsic roll-then-pitch, board→world.
+            // For pure pitch (roll=0) with LED72 up by α: pitch=−α, sp=−sinα, giving
+            // Ry(−α) which correctly rotates B_board back to world-frame B_h.
+            #[rustfmt::skip]
+            let r_tilt = Matrix3::new(
+                    cp,    0.0,     sp,
+                sr*sp,     cr, -sr*cp,
+               -cr*sp,     sr,  cr*cp,
+            );
+            let mag_h = r_tilt * mag_board;
+
+            info!(
+                "acc=({},{},{}) pitch={} roll={} board=({},{},{}) h=({},{})",
+                acc_lpf.x as i32, acc_lpf.y as i32, acc_lpf.z as i32,
+                pitch.to_degrees() as i32,
+                roll.to_degrees() as i32,
+                mag_board.x as i32, mag_board.y as i32, mag_board.z as i32,
+                mag_h.x as i32, mag_h.y as i32,
+            );
+
+            (
+                libm::atan2f(mag_h.y, mag_h.x),
+                roll.to_degrees(),
+                pitch.to_degrees(),
+            )
+        } else {
+            // Flat-plane fallback, heading CW from board +X (LED 72).
+            (libm::atan2f(mag_board.y, mag_board.x), 0.0_f32, 0.0_f32)
+        };
+
         let mut heading_deg = heading_rad.to_degrees();
         if heading_deg < 0.0 {
             heading_deg += 360.0;
@@ -160,35 +223,28 @@ where
         let heading = heading_deg as u16;
         COMPASS_HEADING.sender().send(heading);
 
-        info!(
-            "heading={} mag=({},{},{})",
-            heading, x_cal as i32, y_cal as i32, z_cal as i32
-        );
+        info!("heading={} |mag|={}", heading, cal_mag as i32);
 
-        // IMU data is only used for BLE telemetry — not required for compass heading.
-        let Ok(imu_data) = &imu_result else {
-            continue;
-        };
-
-        let accelerometer = imu_data.raw_acceleration();
-        let angular_velocity = imu_data.raw_angular_velocity();
-        data.acc = AccBleData {
-            x: accelerometer.x,
-            y: accelerometer.y,
-            z: accelerometer.z,
-        };
-        data.gyro = GyroBleData {
-            x: angular_velocity.x,
-            y: angular_velocity.y,
-            z: angular_velocity.z,
-        };
-        data.orientation = AhrsBleData {
-            roll: 0.0,
-            pitch: 0.0,
-            yaw: heading_deg,
-        };
-        data.valid = true;
-
-        SENSOR_DATA.sender().send(data);
+        if let Ok(imu_data) = &imu_result {
+            let accelerometer = imu_data.raw_acceleration();
+            let angular_velocity = imu_data.raw_angular_velocity();
+            data.acc = AccBleData {
+                x: accelerometer.x,
+                y: accelerometer.y,
+                z: accelerometer.z,
+            };
+            data.gyro = GyroBleData {
+                x: angular_velocity.x,
+                y: angular_velocity.y,
+                z: angular_velocity.z,
+            };
+            data.orientation = AhrsBleData {
+                roll: roll_deg,
+                pitch: pitch_deg,
+                yaw: heading_deg,
+            };
+            data.valid = true;
+            SENSOR_DATA.sender().send(data);
+        }
     }
 }

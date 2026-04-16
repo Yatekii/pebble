@@ -58,6 +58,12 @@ mod conversion {
 
 use conversion::*;
 
+/// Fixed (no OTP) LSB → µT scale for X and Y axes, from datasheet constants only.
+/// Use this in calibration mode to avoid temperature-drift artifacts from OTP compensation.
+pub const RAW_LSB_TO_UT_XY: f32 = conversion::LSB_TO_UT_XY;
+/// Fixed (no OTP) LSB → µT scale for Z axis.
+pub const RAW_LSB_TO_UT_Z: f32 = conversion::LSB_TO_UT_Z;
+
 /// OTP calibration data for compensation
 #[derive(Debug, Clone, Default)]
 pub struct CompensationData {
@@ -171,10 +177,17 @@ where
         comp.t_offs = sign_extend_8bit(temp_off_sens as u8) as f32 / 5.0;
         comp.t_sens = sign_extend_8bit((temp_off_sens >> 8) as u8) as f32 / 512.0;
 
-        // Magnetic offsets (12-bit signed)
+        // Magnetic offsets (12-bit signed, packed across OTP word boundaries per Bosch SensorAPI)
+        // offset_x: bits [11:0] of word 0x0E
         comp.offset_x = sign_extend_12bit(otp[bmm350_otp::MAG_OFFSET_X as usize] & 0x0FFF) as f32;
-        comp.offset_y = sign_extend_12bit(otp[bmm350_otp::MAG_OFFSET_Y as usize] & 0x0FFF) as f32;
-        comp.offset_z = sign_extend_12bit(otp[bmm350_otp::MAG_OFFSET_Z as usize] & 0x0FFF) as f32;
+        // offset_y: bits [15:12] of word 0x0E become bits [11:8], bits [7:0] of word 0x0F become bits [7:0]
+        let off_y = ((otp[bmm350_otp::MAG_OFFSET_X as usize] & 0xF000) >> 4)
+            | (otp[bmm350_otp::MAG_OFFSET_Y as usize] & 0x00FF);
+        comp.offset_y = sign_extend_12bit(off_y) as f32;
+        // offset_z: bits [11:8] of word 0x0F become bits [11:8], bits [7:0] of word 0x10 become bits [7:0]
+        let off_z = (otp[bmm350_otp::MAG_OFFSET_Y as usize] & 0x0F00)
+            | (otp[bmm350_otp::MAG_OFFSET_Z as usize] & 0x00FF);
+        comp.offset_z = sign_extend_12bit(off_z) as f32;
 
         // Magnetic sensitivities (8-bit signed)
         // sens_x is upper 8 bits of word 0x10
@@ -352,7 +365,7 @@ where
         let mut x = raw.x as f32 * LSB_TO_UT_XY;
         let mut y = raw.y as f32 * LSB_TO_UT_XY;
         let mut z = raw.z as f32 * LSB_TO_UT_Z;
-        let temp = raw.temp as f32 * LSB_TO_DEGC;
+        let temp = raw.temp as f32 * LSB_TO_DEGC - 25.49;
 
         // Apply temperature compensation
         let temperature = (1.0 + self.comp.t_sens) * temp + self.comp.t_offs;

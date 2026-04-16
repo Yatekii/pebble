@@ -21,22 +21,28 @@ pub async fn run(gps: &mut Option<Gps<'_>>) -> ! {
 
     info!("GPS task started");
 
+    // Log every 100 polls = 10 seconds at 100ms poll rate
+    let mut poll_count: u32 = 0;
+
     loop {
         if let Some(gps_data) = gps.poll() {
-            if gps_data.position.has_fix() {
-                info!(
-                    "GPS: lat={} lon={} alt={}m sats={} fix={:?}",
-                    gps_data.position.latitude,
-                    gps_data.position.longitude,
-                    gps_data.position.altitude,
-                    gps_data.position.satellites,
-                    gps_data.position.fix_quality
-                );
-            } else {
-                info!(
-                    "GPS: waiting for fix (sats={}, in_view={})",
-                    gps_data.position.satellites, gps_data.satellites_in_view
-                );
+            poll_count += 1;
+            if poll_count % 100 == 0 {
+                if gps_data.position.has_fix() {
+                    info!(
+                        "GPS: lat={} lon={} alt={}m sats={} fix={:?}",
+                        gps_data.position.latitude,
+                        gps_data.position.longitude,
+                        gps_data.position.altitude,
+                        gps_data.position.satellites,
+                        gps_data.position.fix_quality
+                    );
+                } else {
+                    info!(
+                        "GPS: waiting for fix (sats={}, in_view={})",
+                        gps_data.position.satellites, gps_data.satellites_in_view
+                    );
+                }
             }
 
             // Send GPS position data
