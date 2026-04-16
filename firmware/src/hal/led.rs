@@ -106,22 +106,25 @@ impl<'a> LedStrip<'a> {
         self.set_all(Color::black());
     }
 
-    /// Set brightness level (0-255)
+    /// Set brightness level (0-255).
+    ///
+    /// The physical output is capped at 1/3 of full scale regardless of the
+    /// value passed. Callers can still use the full 0-255 range as a logical
+    /// scale; the HAL silently clamps the physical drive.
     pub fn set_brightness(&mut self, level: u8) {
-        self.brightness_level = level;
+        self.brightness_level = level / 3;
     }
 
     /// Write the current colors to the LED strip and broadcast state for BLE sync
     pub fn show(&mut self) -> Result<(), esp_hal_smartled::LedAdapterError> {
         let iter = self.colors.iter().map(|c| RGB8::from(*c));
 
-        // Cap at 1/3 of the requested brightness to protect eyes at close range.
-        let effective = self.brightness_level / 3;
+        defmt::trace!("LED show: brightness={}", self.brightness_level);
 
         // Disable interrupts during transmission to prevent timing glitches
         let result = critical_section::with(|_| {
             self.adapter
-                .write(brightness(gamma(iter), effective))
+                .write(brightness(gamma(iter), self.brightness_level))
         });
 
         // Broadcast state for BLE synchronization
@@ -170,6 +173,6 @@ pub fn init<'a>(
     Ok(LedStrip {
         adapter,
         colors: [Color::black(); NUM_LEDS],
-        brightness_level: 255,
+        brightness_level: 0,
     })
 }
