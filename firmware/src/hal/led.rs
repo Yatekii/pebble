@@ -38,6 +38,13 @@ pub static LED_STATE: Watch<CriticalSectionRawMutex, LedState, 2> = Watch::new()
 /// Number of LEDs in the ring
 pub const NUM_LEDS: usize = 72;
 
+/// Maximum physical drive level sent to the strip (0-255).
+///
+/// WS2812B-2020 are extremely bright at close range. Callers use the full
+/// 0-255 scale; this constant is the ceiling that scale maps onto.
+/// Raise it cautiously — at 255 these LEDs are painful to look at directly.
+pub const MAX_BRIGHTNESS: u8 = 8;
+
 /// RGB color
 #[derive(Clone, Copy, Default)]
 pub struct Color {
@@ -108,18 +115,16 @@ impl<'a> LedStrip<'a> {
 
     /// Set brightness level (0-255).
     ///
-    /// The physical output is capped at 1/3 of full scale regardless of the
-    /// value passed. Callers can still use the full 0-255 range as a logical
-    /// scale; the HAL silently clamps the physical drive.
+    /// The physical drive is scaled to [`MAX_BRIGHTNESS`] regardless of the
+    /// value passed — WS2812B-2020s are intense at close range.
+    /// Tune [`MAX_BRIGHTNESS`] to taste; callers keep using 0-255.
     pub fn set_brightness(&mut self, level: u8) {
-        self.brightness_level = level / 3;
+        self.brightness_level = (level as u16 * MAX_BRIGHTNESS as u16 / 255) as u8;
     }
 
     /// Write the current colors to the LED strip and broadcast state for BLE sync
     pub fn show(&mut self) -> Result<(), esp_hal_smartled::LedAdapterError> {
         let iter = self.colors.iter().map(|c| RGB8::from(*c));
-
-        defmt::trace!("LED show: brightness={}", self.brightness_level);
 
         // Disable interrupts during transmission to prevent timing glitches
         let result = critical_section::with(|_| {
