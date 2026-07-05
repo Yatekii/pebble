@@ -257,13 +257,14 @@ async fn main(_spawner: Spawner) -> ! {
     );
 
     // Run the BLE peripheral (host stack, connections, notifications, LED mirror)
-    // alongside the sensor/actuator tasks.
+    // alongside the sensor/actuator/puzzle tasks.
     embassy_futures::join::join3(
         tasks::ble::run(server, peripheral, runner),
-        embassy_futures::join::join3(
+        embassy_futures::join::join4(
             tasks::imu::run(&imu, magnetometer.as_ref()),
             tasks::gps::run(&mut gps),
             tasks::servo::run(&mut servo),
+            tasks::puzzle::run(),
         ),
         tasks::led::run_compass(&mut leds),
     )

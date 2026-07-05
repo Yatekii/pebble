@@ -20,4 +20,5 @@ pub mod ble;
 pub mod gps;
 pub mod imu;
 pub mod led;
+pub mod puzzle;
 pub mod servo;

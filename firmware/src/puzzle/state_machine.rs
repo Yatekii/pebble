@@ -6,8 +6,9 @@
 use super::events::{Action, PuzzleEvent};
 use super::puzzles::Puzzle;
 
-/// Total number of puzzles in the box.
-pub const NUM_PUZZLES: usize = 4;
+/// Number of real, solvable puzzles. `Unlocked` is a terminal state, not a
+/// puzzle, so it is excluded from this count and from `puzzle_states`.
+pub const NUM_PUZZLES: usize = 3;
 
 /// Unique identifier for each puzzle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -141,6 +142,11 @@ impl PuzzleStateMachine {
     /// Get mutable state of the current puzzle.
     fn current_state_mut(&mut self) -> &mut PuzzleState {
         &mut self.puzzle_states[self.current_puzzle as usize]
+    }
+
+    /// True once every real puzzle has been completed (i.e. the box should open).
+    pub fn all_solved(&self) -> bool {
+        self.puzzle_states.iter().all(|s| s.completed)
     }
 
     /// Check if progress needs to be saved.
