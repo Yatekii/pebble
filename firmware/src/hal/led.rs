@@ -122,6 +122,14 @@ impl<'a> LedStrip<'a> {
         self.brightness_level = (level as u16 * MAX_BRIGHTNESS as u16 / 255) as u8;
     }
 
+    /// Set the raw physical drive level (0-255), bypassing [`MAX_BRIGHTNESS`].
+    ///
+    /// Only safe when very few LEDs are lit at once — at 255 across many
+    /// LEDs these are painful to look at.
+    pub fn set_brightness_raw(&mut self, level: u8) {
+        self.brightness_level = level;
+    }
+
     /// Write the current colors to the LED strip and broadcast state for BLE sync
     pub fn show(&mut self) -> Result<(), esp_hal_smartled::LedAdapterError> {
         let iter = self.colors.iter().map(|c| RGB8::from(*c));

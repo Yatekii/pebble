@@ -183,6 +183,13 @@ pub static SATELLITES_1: Watch<CriticalSectionRawMutex, SatelliteChunk, 2> = Wat
 /// Compass heading in degrees (0-359), broadcast from filter to LED task.
 pub static COMPASS_HEADING: Watch<CriticalSectionRawMutex, u16, 2> = Watch::new();
 
+/// Immediate tap event counter. Increments the moment any tap spike resolves
+/// (Peak1 → BetweenTaps, or Peak2 → Cooldown), before single/double is classified.
+///
+/// Use this for low-latency visual feedback. For puzzle logic that needs to
+/// distinguish single vs double, use [`TAP_EVENT`] / [`DOUBLE_TAP_EVENT`].
+pub static IMMEDIATE_TAP_EVENT: Watch<CriticalSectionRawMutex, u32, 2> = Watch::new();
+
 /// Single-tap event counter. Increments by one on each confirmed single tap.
 ///
 /// Receivers detect a new tap by observing the counter change.

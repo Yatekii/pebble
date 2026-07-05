@@ -8,7 +8,10 @@ use embassy_futures::select::{Either3, select3};
 use embassy_time::{Duration, Timer};
 
 use crate::hal::led::{Color, LedStrip, NUM_LEDS};
-use crate::state::{COMPASS_HEADING, DOUBLE_TAP_EVENT, LED_COLORS_0, LED_COLORS_1, LED_COLORS_2, LED_COMMAND, TAP_EVENT};
+use crate::state::{
+    COMPASS_HEADING, DOUBLE_TAP_EVENT, IMMEDIATE_TAP_EVENT, LED_COLORS_0, LED_COLORS_1,
+    LED_COLORS_2, LED_COMMAND,
+};
 
 /// Special LED index values.
 const LED_INDEX_BRIGHTNESS_ONLY: u8 = 0xFE;
@@ -121,8 +124,8 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
             embassy_futures::yield_now().await;
         }
     };
-    let Some(mut tap_receiver) = TAP_EVENT.receiver() else {
-        error!("No TAP_EVENT receiver slot available");
+    let Some(mut tap_receiver) = IMMEDIATE_TAP_EVENT.receiver() else {
+        error!("No IMMEDIATE_TAP_EVENT receiver slot available");
         loop {
             embassy_futures::yield_now().await;
         }
@@ -133,9 +136,8 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
             embassy_futures::yield_now().await;
         }
     };
-
     // Initialize compass display
-    leds.set_brightness(64);
+    leds.set_brightness(255);
     leds.clear();
     let _ = leds.show();
 
@@ -155,44 +157,38 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
                 // Heading is CW from north. LED ring is numbered CCW (increasing index = CCW).
                 // heading=0 → index 71 (LED 72, front), heading=90 → index 17 (LED 18, left side).
                 compass_led = (NUM_LEDS - 1 + heading as usize * NUM_LEDS / 360) % NUM_LEDS;
+                leds.set_brightness(255);
                 leds.clear();
-                leds.set(compass_led, Color::red());
+                leds.set(compass_led, Color::white());
                 if let Err(_e) = leds.show() {
                     error!("Failed to update compass LEDs");
                 }
             }
 
-            Either3::Second(_) => {
-                flash(leds, 1).await;
-                restore_compass(leds, compass_led);
-            }
-
-            Either3::Third(_) => {
-                flash(leds, 2).await;
+            Either3::Second(_) | Either3::Third(_) => {
+                flash(leds).await;
                 restore_compass(leds, compass_led);
             }
         }
     }
 }
 
-/// Flash all LEDs white `times` times, with 80 ms on / 80 ms off per flash.
-async fn flash(leds: &mut LedStrip<'_>, times: u8) {
-    for _ in 0..times {
-        leds.set_brightness(128); // 128 / 3 ≈ 42 effective → ~1/6 of full scale
-        leds.set_all(Color::white());
-        let _ = leds.show();
-        Timer::after(Duration::from_millis(80)).await;
+/// Flash all LEDs white once (80 ms on / 80 ms off).
+async fn flash(leds: &mut LedStrip<'_>) {
+    leds.set_brightness(255);
+    leds.set_all(Color::white());
+    let _ = leds.show();
+    Timer::after(Duration::from_millis(80)).await;
 
-        leds.clear();
-        let _ = leds.show();
-        Timer::after(Duration::from_millis(80)).await;
-    }
+    leds.clear();
+    let _ = leds.show();
+    Timer::after(Duration::from_millis(80)).await;
 }
 
 /// Restore the single compass LED after a flash.
 fn restore_compass(leds: &mut LedStrip<'_>, compass_led: usize) {
-    leds.set_brightness(64);
+    leds.set_brightness(255);
     leds.clear();
-    leds.set(compass_led, Color::red());
+    leds.set(compass_led, Color::white());
     let _ = leds.show();
 }

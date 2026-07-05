@@ -3,14 +3,16 @@
 use defmt::info;
 use embassy_time::{Duration, Timer};
 use embedded_hal::i2c::I2c;
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::Vector3;
 use uom::si::magnetic_flux_density::microtesla;
 
 use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::{RAW_LSB_TO_UT_XY, RAW_LSB_TO_UT_Z, SharedBmm350};
-use crate::math::{BMI270_TO_BOARD, BMM350_TO_BOARD};
-use crate::state::{COMPASS_HEADING, DOUBLE_TAP_EVENT, SENSOR_DATA, SensorData, TAP_EVENT};
+use crate::math::{BMI270_TO_BOARD, BMM350_TO_BOARD, tilt_compensated_heading};
+use crate::state::{
+    COMPASS_HEADING, DOUBLE_TAP_EVENT, IMMEDIATE_TAP_EVENT, SENSOR_DATA, SensorData, TAP_EVENT,
+};
 
 /// Sample period in milliseconds (100Hz = 10ms).
 const SAMPLE_PERIOD_MS: u64 = 10;
@@ -24,11 +26,11 @@ const SAMPLE_PERIOD_MS: u64 = 10;
 const ACC_LPF_ALPHA: f32 = 0.2;
 
 /// Expected Earth-field magnitude after calibration (µT).
-const MAG_FIELD_CENTER: f32 = 48.5;
+/// Centered to span indoor-distorted (~20 µT, steel/rebar shielding) through
+/// outdoor Earth field (~50-65 µT). Tighten once calibration is verified in place.
+const MAG_FIELD_CENTER: f32 = 40.0;
 /// Half-width of the acceptance window around `MAG_FIELD_CENTER` (µT).
-/// Wide enough to tolerate calibration drift and location variation.
-/// Tighten once the calibration is verified correct.
-const MAG_FIELD_TOLERANCE: f32 = 20.0;
+const MAG_FIELD_TOLERANCE: f32 = 30.0;
 
 /// When built with `--features mag-calibrate` (done automatically by the
 /// `mag-calibrate` tool), streams raw magnetometer values over RTT so the
@@ -76,6 +78,8 @@ const TAP_COOLDOWN_TICKS: u8 = 50;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TapResult {
     None,
+    /// A tap spike just resolved — fired immediately, before single/double is known.
+    ImmediateTap,
     Single,
     Double,
 }
@@ -134,8 +138,10 @@ impl TapDetector {
             TapState::Peak1 { ref mut ticks } => {
                 if !above {
                     // Spike resolved quickly → first tap confirmed; open the inter-tap window.
+                    // Fire ImmediateTap now so the LED can respond without waiting for
+                    // the BetweenTaps window to expire (which takes up to 300 ms).
                     self.state = TapState::BetweenTaps { remaining: TAP_BETWEEN_TICKS };
-                    TapResult::None
+                    TapResult::ImmediateTap
                 } else {
                     *ticks += 1;
                     if *ticks >= TAP_PEAK_MAX_TICKS {
@@ -292,12 +298,24 @@ where
             // Tap detection uses raw (un-LPF'd) data so the short impulse is visible.
             // Magnitude is rotation-invariant so we skip the board-frame transform.
             match tap.update(raw_acc.x, raw_acc.y, raw_acc.z) {
+                TapResult::ImmediateTap => {
+                    // Spike resolved — fire immediately for low-latency LED feedback.
+                    // single_count is not yet incremented here; the count is just a
+                    // monotone token so the LED receiver can detect the change.
+                    IMMEDIATE_TAP_EVENT
+                        .sender()
+                        .send(tap.single_count.wrapping_add(tap.double_count));
+                }
                 TapResult::Single => {
                     defmt::info!("tap: single (count={})", tap.single_count);
                     TAP_EVENT.sender().send(tap.single_count);
                 }
                 TapResult::Double => {
                     defmt::info!("tap: double (count={})", tap.double_count);
+                    // Peak2 resolving is itself an immediate tap (second flash of double).
+                    IMMEDIATE_TAP_EVENT
+                        .sender()
+                        .send(tap.single_count.wrapping_add(tap.double_count));
                     DOUBLE_TAP_EVENT.sender().send(tap.double_count);
                 }
                 TapResult::None => {}
@@ -343,49 +361,7 @@ where
         // Tilt-compensated heading using accelerometer.
         // When the IMU is unavailable, fall back to flat-plane heading.
         let (heading_rad, roll_deg, pitch_deg) = if imu_result.is_ok() {
-            // Roll (around board X = LED-72 axis) and pitch (around board Y = LED-18 axis).
-            // Board Z is UP so specific force = +g on Z when flat → atan2(0, +g) = 0 ✓
-            let roll = libm::atan2f(acc_lpf.y, acc_lpf.z);
-            let pitch = libm::atan2f(-acc_lpf.x, libm::sqrtf(acc_lpf.y * acc_lpf.y + acc_lpf.z * acc_lpf.z));
-
-            // Near ±90° pitch, acc.z → 0 and roll becomes numerically indeterminate
-            // (gimbal lock). Clamp pitch to ±80° and zero roll in that region so the
-            // ill-conditioned roll estimate does not corrupt the heading.
-            const PITCH_LIMIT: f32 = 80.0 * core::f32::consts::PI / 180.0;
-            let (pitch, roll) = if pitch.abs() < PITCH_LIMIT {
-                (pitch, roll)
-            } else {
-                (pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT), 0.0_f32)
-            };
-
-            let (sr, cr) = (libm::sinf(roll), libm::cosf(roll));
-            let (sp, cp) = (libm::sinf(pitch), libm::cosf(pitch));
-
-            // R = Rx(roll) * Ry(pitch): intrinsic roll-then-pitch, board→world.
-            // For pure pitch (roll=0) with LED72 up by α: pitch=−α, sp=−sinα, giving
-            // Ry(−α) which correctly rotates B_board back to world-frame B_h.
-            #[rustfmt::skip]
-            let r_tilt = Matrix3::new(
-                    cp,    0.0,     sp,
-                sr*sp,     cr, -sr*cp,
-               -cr*sp,     sr,  cr*cp,
-            );
-            let mag_h = r_tilt * mag_board;
-
-            // info!(
-            //     "acc=({},{},{}) pitch={} roll={} board=({},{},{}) h=({},{})",
-            //     acc_lpf.x as i32, acc_lpf.y as i32, acc_lpf.z as i32,
-            //     pitch.to_degrees() as i32,
-            //     roll.to_degrees() as i32,
-            //     mag_board.x as i32, mag_board.y as i32, mag_board.z as i32,
-            //     mag_h.x as i32, mag_h.y as i32,
-            // );
-
-            (
-                libm::atan2f(mag_h.y, mag_h.x),
-                roll.to_degrees(),
-                pitch.to_degrees(),
-            )
+            tilt_compensated_heading(acc_lpf, mag_board)
         } else {
             // Flat-plane fallback, heading CW from board +X (LED 72).
             (libm::atan2f(mag_board.y, mag_board.x), 0.0_f32, 0.0_f32)
@@ -397,8 +373,6 @@ where
         }
         let heading = heading_deg as u16;
         COMPASS_HEADING.sender().send(heading);
-
-        // info!("heading={} |mag|={}", heading, cal_mag as i32);
 
         if let Ok(imu_data) = &imu_result {
             let accelerometer = imu_data.raw_acceleration();
