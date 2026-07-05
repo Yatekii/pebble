@@ -12,7 +12,7 @@ gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", package = "gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", package = "gpui-component-assets" }
 http_client = { git = "https://github.com/zed-industries/zed", package = "http_client" }
-isahc = { version = "1.7", features = ["http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
 parking_lot = "0.12"
 rand = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }

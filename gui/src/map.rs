@@ -40,22 +40,15 @@ fn tile_url(x: u32, y: u32, zoom: u32) -> String {
 pub struct MapViewElement {
     position: GpsPosition,
     zoom: u32,
-    satellites: u8,
     has_fix: bool,
     satellite_info: Vec<SatelliteInfo>,
 }
 
 impl MapViewElement {
-    pub fn new(
-        position: GpsPosition,
-        satellites: u8,
-        has_fix: bool,
-        satellite_info: Vec<SatelliteInfo>,
-    ) -> Self {
+    pub fn new(position: GpsPosition, has_fix: bool, satellite_info: Vec<SatelliteInfo>) -> Self {
         Self {
             position,
             zoom: 15,
-            satellites,
             has_fix,
             satellite_info,
         }
@@ -332,7 +325,6 @@ impl MapViewElement {
         let mut galileo_count = 0u8;
         let mut beidou_count = 0u8;
         let mut glonass_count = 0u8;
-        let mut other_count = 0u8;
 
         // Collect satellites with signal (SNR > 0)
         let mut tracked_sats: Vec<&SatelliteInfo> = Vec::new();
@@ -346,7 +338,7 @@ impl MapViewElement {
                 GnssType::Galileo => galileo_count += 1,
                 GnssType::BeiDou => beidou_count += 1,
                 GnssType::Glonass => glonass_count += 1,
-                _ => other_count += 1,
+                _ => {}
             }
         }
 

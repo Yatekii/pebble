@@ -111,6 +111,12 @@ pub async fn run<'srv, 'stack, C: Controller>(
                 };
                 loop {
                     let data = receiver.changed().await;
+                    // Throttle + coalesce to ~50Hz. The IMU publishes at 100Hz;
+                    // notifying all 4 characteristics per sample floods the BLE
+                    // link (~400 pkt/s), starving CCCD-write responses so new
+                    // subscriptions get dropped mid-connect.
+                    Timer::after(Duration::from_millis(20)).await;
+                    let data = receiver.try_get().unwrap_or(data);
                     if !data.valid {
                         continue;
                     }

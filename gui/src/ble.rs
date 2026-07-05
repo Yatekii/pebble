@@ -134,18 +134,6 @@ impl GnssType {
             _ => GnssType::Unknown,
         }
     }
-
-    pub fn short_name(&self) -> &'static str {
-        match self {
-            GnssType::Unknown => "??",
-            GnssType::Gps => "GP",
-            GnssType::Glonass => "GL",
-            GnssType::Galileo => "GA",
-            GnssType::BeiDou => "BD",
-            GnssType::Qzss => "QZ",
-            GnssType::Sbas => "SB",
-        }
-    }
 }
 
 /// Individual satellite info
@@ -156,49 +144,38 @@ pub struct SatelliteInfo {
     /// Satellite PRN/ID
     pub prn: u8,
     /// Elevation in degrees (0-90)
+    #[expect(unused)]
     pub elevation: u8,
     /// Azimuth in degrees (0-359)
+    #[expect(unused)]
     pub azimuth: u16,
     /// Signal-to-noise ratio in dB-Hz (0-99)
     pub snr: u8,
 }
 
-/// Maximum satellites we track
-pub const MAX_SATELLITES: usize = 24;
-
-/// All satellite data
-#[derive(Clone, Debug, Default)]
-pub struct SatelliteData {
-    pub satellites: Vec<SatelliteInfo>,
-}
-
-impl SatelliteData {
-    /// Parse satellite chunk from BLE data (73 bytes: count + 12 * 6 bytes)
-    pub fn parse_chunk(data: &[u8], chunk_index: u8) -> Vec<SatelliteInfo> {
-        if data.is_empty() {
-            return Vec::new();
-        }
-        let count = data[0] as usize;
-        let mut satellites = Vec::with_capacity(count.min(12));
-
-        for i in 0..count.min(12) {
-            let offset = 1 + i * 6;
-            if offset + 6 > data.len() {
-                break;
-            }
-            satellites.push(SatelliteInfo {
-                gnss_type: GnssType::from_u8(data[offset]),
-                prn: data[offset + 1],
-                elevation: data[offset + 2],
-                azimuth: u16::from_le_bytes([data[offset + 3], data[offset + 4]]),
-                snr: data[offset + 5],
-            });
-        }
-
-        // Adjust PRN display for chunk 1 is handled elsewhere
-        let _ = chunk_index;
-        satellites
+/// Parse satellite chunk from BLE data (73 bytes: count + 12 * 6 bytes)
+fn parse_satellite_chunk(data: &[u8], _chunk_index: u8) -> Vec<SatelliteInfo> {
+    if data.is_empty() {
+        return Vec::new();
     }
+    let count = data[0] as usize;
+    let mut satellites = Vec::with_capacity(count.min(12));
+
+    for i in 0..count.min(12) {
+        let offset = 1 + i * 6;
+        if offset + 6 > data.len() {
+            break;
+        }
+        satellites.push(SatelliteInfo {
+            gnss_type: GnssType::from_u8(data[offset]),
+            prn: data[offset + 1],
+            elevation: data[offset + 2],
+            azimuth: u16::from_le_bytes([data[offset + 3], data[offset + 4]]),
+            snr: data[offset + 5],
+        });
+    }
+
+    satellites
 }
 
 /// Device peripheral status
@@ -235,14 +212,6 @@ impl PeripheralStatusData {
             8 => "OTP Error",
             _ => "Unknown Error",
         })
-    }
-
-    pub fn is_ok(&self) -> bool {
-        self.status == 1
-    }
-
-    pub fn is_error(&self) -> bool {
-        self.status == 2
     }
 }
 
@@ -391,12 +360,24 @@ async fn run_ble_client(
         let _ = tx.send(BleMessage::StateChanged(ConnectionState::Connecting));
         state.lock().connection_state = ConnectionState::Connecting;
 
-        if let Err(e) = device.connect().await {
-            eprintln!("Failed to connect: {:?}", e);
-            let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
-            state.lock().connection_state = ConnectionState::Disconnected;
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            continue;
+        // connect() can hang forever on macOS if the peripheral is wedged (e.g.
+        // ESP holding a stale connection); bound it so the loop retries instead.
+        match tokio::time::timeout(Duration::from_secs(10), device.connect()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                eprintln!("Failed to connect: {:?}", e);
+                let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
+                state.lock().connection_state = ConnectionState::Disconnected;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(_) => {
+                eprintln!("connect() timed out after 10s, retrying");
+                let _ = tx.send(BleMessage::StateChanged(ConnectionState::Disconnected));
+                state.lock().connection_state = ConnectionState::Disconnected;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
         }
 
         // Verify connection is actually established
@@ -468,115 +449,27 @@ async fn run_ble_client(
             .iter()
             .find(|c| c.uuid == DEVICE_STATUS_UUID);
 
-        // Subscribe to notifications
-        if let Some(acc_char) = acc_char {
-            eprintln!("Subscribing to ACC characteristic...");
-            match device.subscribe(acc_char).await {
-                Ok(_) => eprintln!("  Subscribed to ACC notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to ACC: {:?}", e),
+        // Subscribe to notifications.
+        for (name, ch) in [
+            ("ACC", acc_char),
+            ("GYRO", gyro_char),
+            ("MAG", mag_char),
+            ("AHRS", ahrs_char),
+            ("GPS", gps_char),
+            ("Satellites0", sats0_char),
+            ("Satellites1", sats1_char),
+            ("LED0", led0_char),
+            ("LED1", led1_char),
+            ("LED2", led2_char),
+            ("DeviceStatus", status_char),
+        ] {
+            match ch {
+                Some(ch) => match device.subscribe(ch).await {
+                    Ok(_) => eprintln!("  Subscribed to {name}"),
+                    Err(e) => eprintln!("  Failed to subscribe to {name}: {e:?}"),
+                },
+                None => eprintln!("{name} characteristic not found!"),
             }
-        } else {
-            eprintln!("ACC characteristic not found!");
-        }
-
-        if let Some(gyro_char) = gyro_char {
-            eprintln!("Subscribing to GYRO characteristic...");
-            match device.subscribe(gyro_char).await {
-                Ok(_) => eprintln!("  Subscribed to GYRO notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to GYRO: {:?}", e),
-            }
-        } else {
-            eprintln!("GYRO characteristic not found!");
-        }
-
-        if let Some(mag_char) = mag_char {
-            eprintln!("Subscribing to MAG characteristic...");
-            match device.subscribe(mag_char).await {
-                Ok(_) => eprintln!("  Subscribed to MAG notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to MAG: {:?}", e),
-            }
-        } else {
-            eprintln!("MAG characteristic not found!");
-        }
-
-        if let Some(ahrs_char) = ahrs_char {
-            eprintln!("Subscribing to AHRS characteristic...");
-            match device.subscribe(ahrs_char).await {
-                Ok(_) => eprintln!("  Subscribed to AHRS notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to AHRS: {:?}", e),
-            }
-        } else {
-            eprintln!("AHRS characteristic not found!");
-        }
-
-        if let Some(gps_char) = gps_char {
-            eprintln!("Subscribing to GPS characteristic...");
-            match device.subscribe(gps_char).await {
-                Ok(_) => eprintln!("  Subscribed to GPS notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to GPS: {:?}", e),
-            }
-        } else {
-            eprintln!("GPS characteristic not found!");
-        }
-
-        if let Some(sats0_char) = sats0_char {
-            eprintln!("Subscribing to Satellites0 characteristic...");
-            match device.subscribe(sats0_char).await {
-                Ok(_) => eprintln!("  Subscribed to Satellites0 notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to Satellites0: {:?}", e),
-            }
-        } else {
-            eprintln!("Satellites0 characteristic not found!");
-        }
-
-        if let Some(sats1_char) = sats1_char {
-            eprintln!("Subscribing to Satellites1 characteristic...");
-            match device.subscribe(sats1_char).await {
-                Ok(_) => eprintln!("  Subscribed to Satellites1 notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to Satellites1: {:?}", e),
-            }
-        } else {
-            eprintln!("Satellites1 characteristic not found!");
-        }
-
-        if let Some(led0_char) = led0_char {
-            eprintln!("Subscribing to LED0 characteristic...");
-            match device.subscribe(led0_char).await {
-                Ok(_) => eprintln!("  Subscribed to LED0 notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to LED0: {:?}", e),
-            }
-        } else {
-            eprintln!("LED0 characteristic not found!");
-        }
-
-        if let Some(led1_char) = led1_char {
-            eprintln!("Subscribing to LED1 characteristic...");
-            match device.subscribe(led1_char).await {
-                Ok(_) => eprintln!("  Subscribed to LED1 notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to LED1: {:?}", e),
-            }
-        } else {
-            eprintln!("LED1 characteristic not found!");
-        }
-
-        if let Some(led2_char) = led2_char {
-            eprintln!("Subscribing to LED2 characteristic...");
-            match device.subscribe(led2_char).await {
-                Ok(_) => eprintln!("  Subscribed to LED2 notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to LED2: {:?}", e),
-            }
-        } else {
-            eprintln!("LED2 characteristic not found!");
-        }
-
-        if let Some(status_char) = status_char {
-            eprintln!("Subscribing to DeviceStatus characteristic...");
-            match device.subscribe(status_char).await {
-                Ok(_) => eprintln!("  Subscribed to DeviceStatus notifications"),
-                Err(e) => eprintln!("  Failed to subscribe to DeviceStatus: {:?}", e),
-            }
-        } else {
-            eprintln!("DeviceStatus characteristic not found!");
         }
 
         // Read LED colors once on connect to get initial state
@@ -749,13 +642,13 @@ async fn run_ble_client(
                     let _ = tx.send(BleMessage::DeviceStatus(status));
                 }
             } else if notification.uuid == SATELLITES_0_UUID && !notification.value.is_empty() {
-                let satellites = SatelliteData::parse_chunk(&notification.value, 0);
+                let satellites = parse_satellite_chunk(&notification.value, 0);
                 if notification_count <= 20 || notification_count % 100 == 0 {
                     eprintln!("Satellites0 received: {} satellites", satellites.len());
                 }
                 let _ = tx.send(BleMessage::SatelliteChunk(0, satellites));
             } else if notification.uuid == SATELLITES_1_UUID && !notification.value.is_empty() {
-                let satellites = SatelliteData::parse_chunk(&notification.value, 1);
+                let satellites = parse_satellite_chunk(&notification.value, 1);
                 if notification_count <= 20 || notification_count % 100 == 0 {
                     eprintln!("Satellites1 received: {} satellites", satellites.len());
                 }

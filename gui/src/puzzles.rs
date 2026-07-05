@@ -26,7 +26,6 @@ pub struct PuzzleStep {
 #[derive(Clone, Debug)]
 pub struct Puzzle {
     pub name: &'static str,
-    pub description: &'static str,
     pub status: PuzzleStatus,
     pub steps: Vec<PuzzleStep>,
 }
@@ -60,13 +59,11 @@ pub fn sample_puzzles() -> Vec<Puzzle> {
     vec![
         Puzzle {
             name: "The Awakening",
-            description: "Shake the box to wake it up",
             status: PuzzleStatus::Solved,
             steps: vec![],
         },
         Puzzle {
             name: "Cardinal Direction",
-            description: "Point the box towards the four cardinal directions",
             status: PuzzleStatus::InProgress,
             steps: vec![
                 PuzzleStep {
@@ -89,7 +86,6 @@ pub fn sample_puzzles() -> Vec<Puzzle> {
         },
         Puzzle {
             name: "The Journey",
-            description: "Bring the box to the secret location",
             status: PuzzleStatus::Locked,
             steps: vec![
                 PuzzleStep {
@@ -108,13 +104,11 @@ pub fn sample_puzzles() -> Vec<Puzzle> {
         },
         Puzzle {
             name: "The Dance",
-            description: "Perform the secret rotation sequence",
             status: PuzzleStatus::Locked,
             steps: vec![],
         },
         Puzzle {
             name: "Final Revelation",
-            description: "The box opens to reveal its treasure",
             status: PuzzleStatus::Locked,
             steps: vec![],
         },

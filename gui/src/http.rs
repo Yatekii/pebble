@@ -1,67 +1,69 @@
 //! HTTP client for tile loading.
 
 use futures::future::BoxFuture;
-use futures::io::AsyncReadExt;
 use http_client::{AsyncBody, HttpClient, Request, Response};
 
 use std::sync::Arc;
 
-/// Simple HTTP client using isahc.
-pub struct IsahcHttpClient {
-    client: isahc::HttpClient,
+/// HTTP client using reqwest (rustls, no OpenSSL/curl).
+///
+/// reqwest/hyper need a Tokio reactor to drive I/O, but gpui polls our returned
+/// future on its own executor. So we own a Tokio runtime and run each request on
+/// it via `spawn`, awaiting the join handle from whatever executor polls us.
+pub struct ReqwestHttpClient {
+    client: reqwest::Client,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
-impl IsahcHttpClient {
-    pub fn new() -> Result<Arc<Self>, isahc::Error> {
-        let client = isahc::HttpClient::builder()
-            .default_headers(&[("User-Agent", "PebbleGUI/1.0")])
+impl ReqwestHttpClient {
+    pub fn new() -> anyhow::Result<Arc<Self>> {
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?,
+        );
+        let client = reqwest::Client::builder()
+            .user_agent("PebbleGUI/1.0")
             .build()?;
 
-        Ok(Arc::new(Self { client }))
+        Ok(Arc::new(Self { client, runtime }))
     }
 }
 
-impl HttpClient for IsahcHttpClient {
+impl HttpClient for ReqwestHttpClient {
     fn send(
         &self,
         req: Request<AsyncBody>,
     ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
         let client = self.client.clone();
+        let runtime = self.runtime.clone();
 
         Box::pin(async move {
             let (parts, _body) = req.into_parts();
 
-            let mut builder = isahc::Request::builder()
-                .method(parts.method.as_str())
-                .uri(parts.uri.to_string());
+            let handle = runtime.spawn(async move {
+                let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes())?;
+                let mut builder = client.request(method, parts.uri.to_string());
+                for (key, value) in parts.headers.iter() {
+                    builder = builder.header(key.as_str(), value.as_bytes());
+                }
 
-            for (key, value) in parts.headers.iter() {
-                builder = builder.header(key.as_str(), value.to_str().unwrap_or(""));
-            }
+                let response = builder.send().await?;
+                let status = response.status();
+                let headers = response.headers().clone();
+                let bytes = response.bytes().await?;
+                Ok::<_, anyhow::Error>((status, headers, bytes))
+            });
 
-            let isahc_req = builder.body(()).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-            let response = client
-                .send_async(isahc_req)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-            let status = response.status();
-            let headers = response.headers().clone();
-
-            let mut body = response.into_body();
-            let mut bytes = Vec::new();
-            body.read_to_end(&mut bytes)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let (status, headers, bytes) = handle.await??;
 
             let mut builder = http_client::http::Response::builder().status(status.as_u16());
             for (key, value) in headers.iter() {
-                builder = builder.header(key.as_str(), value.to_str().unwrap_or(""));
+                builder = builder.header(key.as_str(), value.as_bytes());
             }
 
             let response = builder
-                .body(AsyncBody::from_bytes(bytes.into()))
+                .body(AsyncBody::from_bytes(bytes))
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
             Ok(response)

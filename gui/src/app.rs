@@ -33,10 +33,11 @@ pub struct ImuViewerApp {
     connection_state: ConnectionState,
     led_colors: LedColors,
     gps_reading: GpsReading,
-    /// Satellite info from chunk 0 (satellites 0-11)
-    satellites_0: Vec<SatelliteInfo>,
-    /// Satellite info from chunk 1 (satellites 12-23)
-    satellites_1: Vec<SatelliteInfo>,
+    /// Combined satellite info from both chunks (up to 24 satellites)
+    satellites: Vec<SatelliteInfo>,
+    /// Temporary storage for satellite chunks before combining
+    satellites_chunk_0: Vec<SatelliteInfo>,
+    satellites_chunk_1: Vec<SatelliteInfo>,
     pcb_mesh: Option<Arc<Mesh3D>>,
     device_status: Option<DeviceStatusData>,
 }
@@ -107,8 +108,9 @@ impl ImuViewerApp {
             connection_state: ConnectionState::Disconnected,
             led_colors: [[0; 3]; 72],
             gps_reading: GpsReading::default(),
-            satellites_0: Vec::new(),
-            satellites_1: Vec::new(),
+            satellites: Vec::new(),
+            satellites_chunk_0: Vec::new(),
+            satellites_chunk_1: Vec::new(),
             pcb_mesh,
             device_status: None,
         }
@@ -159,10 +161,14 @@ impl ImuViewerApp {
             }
             BleMessage::SatelliteChunk(chunk, satellites) => {
                 if chunk == 0 {
-                    self.satellites_0 = satellites;
+                    self.satellites_chunk_0 = satellites;
                 } else {
-                    self.satellites_1 = satellites;
+                    self.satellites_chunk_1 = satellites;
                 }
+                // Combine chunks immediately
+                self.satellites.clear();
+                self.satellites.extend_from_slice(&self.satellites_chunk_0);
+                self.satellites.extend_from_slice(&self.satellites_chunk_1);
             }
         }
     }
@@ -392,17 +398,13 @@ impl Render for ImuViewerApp {
                                 self.pcb_mesh.clone(),
                             )))
                             .child(div().flex_1().min_h_0().child({
-                                // Combine satellite chunks
-                                let mut all_sats = self.satellites_0.clone();
-                                all_sats.extend(self.satellites_1.iter().cloned());
                                 MapViewElement::new(
                                     GpsPosition {
                                         latitude: self.gps_reading.latitude as f64,
                                         longitude: self.gps_reading.longitude as f64,
                                     },
-                                    self.gps_reading.satellites,
                                     self.gps_reading.has_fix,
-                                    all_sats,
+                                    self.satellites.clone(),
                                 )
                             })),
                     )
@@ -500,7 +502,7 @@ impl Render for ImuViewerApp {
 }
 
 pub fn run_app() {
-    let http_client = match crate::http::IsahcHttpClient::new() {
+    let http_client = match crate::http::ReqwestHttpClient::new() {
         Ok(client) => client,
         Err(e) => {
             eprintln!("Failed to create HTTP client: {e}");
