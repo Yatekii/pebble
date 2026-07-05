@@ -3,22 +3,18 @@
 #![deny(clippy::all)]
 
 use bt_hci::controller::ExternalController;
-use core::sync::atomic::Ordering;
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
 use embedded_hal::delay::DelayNs;
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
-use pebble::comms::ble::{LedColorChunk, SensorServer};
-use pebble::hal::led::LED_STATE;
+use pebble::comms::ble::SensorServer;
 use pebble::hal::{gps, imu, led, servo};
 use pebble::state::{
-    ACTIVE_CONNECTIONS, DEVICE_STATUS, DeviceStatus, GPS_DATA, LED_COMMAND, LedCommand,
-    PeripheralError, PeripheralStatus, SATELLITES_0, SATELLITES_1, SENSOR_DATA,
+    DEVICE_STATUS, DeviceStatus, LED_COMMAND, LedCommand, PeripheralError, PeripheralStatus,
 };
 use pebble::tasks;
 use static_cell::StaticCell;
@@ -28,13 +24,6 @@ extern crate alloc;
 
 const CONNECTIONS_MAX: usize = 2;
 const L2CAP_CHANNELS_MAX: usize = 4;
-
-/// Advertising data for BLE peripheral.
-#[rustfmt::skip]
-const ADV_DATA: [u8; 11] = [
-    0x02, 0x01, 0x06,                              // Flags: LE General Discoverable + BR/EDR Not Supported
-    0x07, 0x09, b'P', b'e', b'b', b'b', b'l', b'e' // Complete Local Name: "Pebble"
-];
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -227,9 +216,7 @@ async fn main(_spawner: Spawner) -> ! {
 
     let stack = trouble_host::new(ble_controller, host_resources);
     let Host {
-        mut peripheral,
-        mut runner,
-        ..
+        peripheral, runner, ..
     } = stack.build();
 
     info!("BLE stack initialized");
@@ -269,347 +256,16 @@ async fn main(_spawner: Spawner) -> ! {
         device_status.magnetometer.to_bytes().0,
     );
 
-    // Task to run the BLE stack
-    let runner_task = async {
-        let _ = runner.run().await;
-    };
-
-    // Main BLE peripheral loop - accepts connections and handles them concurrently
-    let ble_task = async {
-        loop {
-            info!("Starting BLE advertising...");
-
-            let advertiser = match peripheral
-                .advertise(
-                    &Default::default(),
-                    Advertisement::ConnectableScannableUndirected {
-                        adv_data: &ADV_DATA,
-                        scan_data: &[],
-                    },
-                )
-                .await
-            {
-                Ok(advertiser) => advertiser,
-                Err(_e) => {
-                    info!("Advertising error");
-                    Timer::after(Duration::from_secs(1)).await;
-                    continue;
-                }
-            };
-
-            info!("Waiting for connection...");
-
-            let conn = match advertiser.accept().await {
-                Ok(conn) => match conn.with_attribute_server(server) {
-                    Ok(gatt_conn) => gatt_conn,
-                    Err(_e) => {
-                        info!("Failed to create GATT connection");
-                        continue;
-                    }
-                },
-                Err(_e) => {
-                    info!("Connection accept error");
-                    continue;
-                }
-            };
-
-            let conn_num = ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed) + 1;
-            info!("Client connected! ({} active)", conn_num);
-
-            // Task to handle GATT events
-            let gatt_events = async {
-                loop {
-                    match conn.next().await {
-                        GattConnectionEvent::Disconnected { reason } => {
-                            info!("GATT disconnected: {:?}", reason);
-                            break;
-                        }
-                        GattConnectionEvent::Gatt {
-                            event: GattEvent::Write(write_event),
-                        } => {
-                            let handle = write_event.handle();
-                            let value = write_event.data();
-                            tasks::ble::handle_led_write(handle, value, server);
-                        }
-                        _ => {}
-                    }
-                }
-            };
-
-            // Task to send sensor notifications
-            let sensor_notify = async {
-                let Some(mut receiver) = SENSOR_DATA.receiver() else {
-                    error!("No sensor data receiver slot available");
-                    return;
-                };
-                loop {
-                    let data = receiver.changed().await;
-                    if !data.valid {
-                        continue;
-                    }
-
-                    if server
-                        .sensor_service
-                        .acc_data
-                        .notify(&conn, &data.acc.to_bytes())
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if server
-                        .sensor_service
-                        .gyro_data
-                        .notify(&conn, &data.gyro.to_bytes())
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if server
-                        .sensor_service
-                        .mag_data
-                        .notify(&conn, &data.mag.to_bytes())
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if server
-                        .sensor_service
-                        .orientation
-                        .notify(&conn, &data.orientation.to_bytes())
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            };
-
-            // Task to send LED notifications (throttled to 10Hz)
-            let led_notify = async {
-                let Some(mut receiver) = LED_STATE.receiver() else {
-                    error!("No LED state receiver slot available");
-                    return;
-                };
-                loop {
-                    let state = receiver.changed().await;
-                    Timer::after(Duration::from_millis(100)).await;
-                    let state = receiver.try_get().unwrap_or(state);
-
-                    if server
-                        .sensor_service
-                        .led_brightness
-                        .notify(&conn, &state.brightness)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if server
-                        .sensor_service
-                        .led_colors_0
-                        .notify(&conn, &LedColorChunk(state.chunk0))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if server
-                        .sensor_service
-                        .led_colors_1
-                        .notify(&conn, &LedColorChunk(state.chunk1))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    if server
-                        .sensor_service
-                        .led_colors_2
-                        .notify(&conn, &LedColorChunk(state.chunk2))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-
-                    let ctrl = [
-                        state.brightness,
-                        0xFF,
-                        state.chunk0[0],
-                        state.chunk0[1],
-                        state.chunk0[2],
-                    ];
-                    if server
-                        .sensor_service
-                        .led_control
-                        .notify(&conn, &ctrl)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            };
-
-            // Task to send GPS notifications
-            let gps_notify = async {
-                let Some(mut receiver) = GPS_DATA.receiver() else {
-                    error!("No GPS data receiver slot available");
-                    return;
-                };
-                loop {
-                    let data = receiver.changed().await;
-                    if server
-                        .sensor_service
-                        .gps_data
-                        .notify(&conn, &data.to_bytes())
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            };
-
-            // Task to send satellite info notifications (chunk 0)
-            let satellites_0_notify = async {
-                let Some(mut receiver) = SATELLITES_0.receiver() else {
-                    error!("No satellites_0 receiver slot available");
-                    return;
-                };
-                loop {
-                    let data = receiver.changed().await;
-                    if server
-                        .sensor_service
-                        .satellites_0
-                        .notify(&conn, &data)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            };
-
-            // Task to send satellite info notifications (chunk 1)
-            let satellites_1_notify = async {
-                let Some(mut receiver) = SATELLITES_1.receiver() else {
-                    error!("No satellites_1 receiver slot available");
-                    return;
-                };
-                loop {
-                    let data = receiver.changed().await;
-                    if server
-                        .sensor_service
-                        .satellites_1
-                        .notify(&conn, &data)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            };
-
-            // Task to send device status on connect (one-shot, then watches for changes)
-            let status_notify = async {
-                let Some(mut receiver) = DEVICE_STATUS.receiver() else {
-                    error!("No device status receiver slot available");
-                    return;
-                };
-                // Send current status immediately on connect
-                let status = receiver.get().await;
-                let _ = server
-                    .sensor_service
-                    .device_status
-                    .notify(&conn, &status.to_bytes())
-                    .await;
-
-                // Watch for any status changes (unlikely after init, but supported)
-                loop {
-                    let status = receiver.changed().await;
-                    if server
-                        .sensor_service
-                        .device_status
-                        .notify(&conn, &status.to_bytes())
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            };
-
-            // Run all notification tasks - any one completing/failing will end the connection
-            // Use nested selects since select only supports up to 5 futures
-            embassy_futures::select::select(
-                embassy_futures::select::select5(
-                    gatt_events,
-                    sensor_notify,
-                    led_notify,
-                    gps_notify,
-                    status_notify,
-                ),
-                embassy_futures::select::select(satellites_0_notify, satellites_1_notify),
-            )
-            .await;
-
-            let remaining = ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed) - 1;
-            info!("Client disconnected ({} remaining)", remaining);
-        }
-    };
-
-    // Task to sync LED state to BLE characteristics
-    let led_ble_sync_task = async {
-        let Some(mut receiver) = LED_STATE.receiver() else {
-            error!("No LED state receiver slot available for BLE sync");
-            return;
-        };
-        loop {
-            let state = receiver.changed().await;
-
-            let _ = server
-                .sensor_service
-                .led_brightness
-                .set(server, &state.brightness);
-            let _ = server
-                .sensor_service
-                .led_colors_0
-                .set(server, &LedColorChunk(state.chunk0));
-            let _ = server
-                .sensor_service
-                .led_colors_1
-                .set(server, &LedColorChunk(state.chunk1));
-            let _ = server
-                .sensor_service
-                .led_colors_2
-                .set(server, &LedColorChunk(state.chunk2));
-
-            let ctrl = [
-                state.brightness,
-                0xFF,
-                state.chunk0[0],
-                state.chunk0[1],
-                state.chunk0[2],
-            ];
-            let _ = server.sensor_service.led_control.set(server, &ctrl);
-        }
-    };
-
-    // Run all tasks concurrently
-    embassy_futures::join::join5(
-        runner_task,
+    // Run the BLE peripheral (host stack, connections, notifications, LED mirror)
+    // alongside the sensor/actuator tasks.
+    embassy_futures::join::join3(
+        tasks::ble::run(server, peripheral, runner),
         embassy_futures::join::join3(
             tasks::imu::run(&imu, magnetometer.as_ref()),
             tasks::gps::run(&mut gps),
             tasks::servo::run(&mut servo),
         ),
-        ble_task,
         tasks::led::run_compass(&mut leds),
-        led_ble_sync_task,
     )
     .await;
 
