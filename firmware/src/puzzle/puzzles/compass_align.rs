@@ -95,7 +95,7 @@ impl Puzzle for CompassAlignPuzzle {
 
 /// Calculate the smallest difference between two headings.
 fn heading_difference(a: u16, b: u16) -> u16 {
-    let diff = if a > b { a - b } else { b - a };
+    let diff = a.abs_diff(b);
     if diff > 180 { 360 - diff } else { diff }
 }
 

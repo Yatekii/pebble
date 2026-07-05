@@ -27,7 +27,7 @@ pub async fn run(gps: &mut Option<Gps<'_>>) -> ! {
     loop {
         if let Some(gps_data) = gps.poll() {
             poll_count += 1;
-            if poll_count % 100 == 0 {
+            if poll_count.is_multiple_of(100) {
                 if gps_data.position.has_fix() {
                     info!(
                         "GPS: lat={} lon={} alt={}m sats={} fix={:?}",

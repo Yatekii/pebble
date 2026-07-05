@@ -127,7 +127,7 @@ where
 
         // Get data length (includes CRC)
         let total_len = u16::from_le_bytes([buf[2], buf[3]]) as usize;
-        if total_len < CRC_SIZE || total_len > MAX_DATA_SIZE + CRC_SIZE {
+        if !(CRC_SIZE..=MAX_DATA_SIZE + CRC_SIZE).contains(&total_len) {
             return Err(Error::Corrupted);
         }
 

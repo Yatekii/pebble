@@ -324,12 +324,12 @@ async fn main(_spawner: Spawner) -> ! {
                             info!("GATT disconnected: {:?}", reason);
                             break;
                         }
-                        GattConnectionEvent::Gatt { event } => {
-                            if let GattEvent::Write(write_event) = event {
-                                let handle = write_event.handle();
-                                let value = write_event.data();
-                                tasks::ble::handle_led_write(handle, value, server);
-                            }
+                        GattConnectionEvent::Gatt {
+                            event: GattEvent::Write(write_event),
+                        } => {
+                            let handle = write_event.handle();
+                            let value = write_event.data();
+                            tasks::ble::handle_led_write(handle, value, server);
                         }
                         _ => {}
                     }

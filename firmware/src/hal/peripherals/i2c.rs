@@ -23,7 +23,7 @@ where
     }
 
     pub fn device_with_address<'a, const A: u8>(&'a self) -> SharedI2cDevice<'a, A, I2C> {
-        SharedI2cDevice { bus: &self }
+        SharedI2cDevice { bus: self }
     }
 
     pub fn write(&self, address: u8, buf: &[u8]) -> Result<(), Error<I2C::Error>> {

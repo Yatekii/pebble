@@ -39,7 +39,7 @@ mod conversion {
     /// ADC gain (~0.667).
     pub const ADC_GAIN: f32 = 1.0 / 1.5;
     /// Lookup table correction gain.
-    pub const LUT_GAIN: f32 = 0.714607238769531;
+    pub const LUT_GAIN: f32 = 0.714_607_24;
     /// Temperature sensitivity.
     pub const TEMP_SENS: f32 = 0.00204;
 
