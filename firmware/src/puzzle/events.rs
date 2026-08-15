@@ -36,7 +36,7 @@ pub enum Command {
 }
 
 /// Actions that puzzles can emit.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     /// Set LED pattern.
     SetLeds(LedPattern),
@@ -52,7 +52,7 @@ pub enum Action {
 }
 
 /// LED pattern types for puzzle feedback.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LedPattern {
     /// All LEDs off.
     Off,
@@ -77,7 +77,7 @@ pub enum LedPattern {
 }
 
 /// Servo positions.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ServoPosition {
     /// Locked position (0 degrees).
     Locked,
@@ -88,7 +88,7 @@ pub enum ServoPosition {
 }
 
 /// Hint types for user feedback.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HintType {
     /// Direction hint (for navigation puzzles).
     Direction { heading: u16 },
@@ -99,7 +99,7 @@ pub enum HintType {
 }
 
 /// Tilt directions for orientation puzzles.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TiltDirection {
     Forward,
     Back,

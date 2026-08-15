@@ -283,7 +283,7 @@ async fn main(_spawner: Spawner) -> ! {
             tasks::puzzle::run(),
             tasks::battery::run(&mut battery),
         ),
-        tasks::led::run_compass(&mut leds),
+        tasks::led::run_puzzle(&mut leds),
     )
     .await;
 
