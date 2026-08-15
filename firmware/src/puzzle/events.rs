@@ -60,8 +60,9 @@ pub enum LedPattern {
     /// All LEDs solid color.
     Solid { r: u8, g: u8, b: u8 },
 
-    /// Compass mode - show heading indicator.
-    Compass { target_heading: u16 },
+    /// Point the ring at a target: direction to it in degrees, clockwise from
+    /// the box front (0 = straight ahead). Used to steer toward a waypoint.
+    Compass { bearing_deg: u16 },
 
     /// Pulsing animation.
     Pulse { r: u8, g: u8, b: u8, speed_ms: u16 },

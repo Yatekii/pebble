@@ -154,14 +154,25 @@ async fn render(leds: &mut LedStrip<'_>, pattern: LedPattern) {
                 leds.set(i, Color::new(r, g, b));
             }
         }
+        LedPattern::Compass { bearing_deg } => {
+            leds.set_brightness(255);
+            leds.clear();
+            leds.set(ring_led(bearing_deg), Color::white());
+        }
         LedPattern::Success => return flash_twice(leds, Color::green()).await,
         LedPattern::Error => return flash_twice(leds, Color::red()).await,
-        // Compass rendering arrives with the waypoint puzzle.
-        LedPattern::Compass { .. } => return,
     }
     if leds.show().is_err() {
         error!("Failed to update puzzle LEDs");
     }
+}
+
+/// LED index pointing at `bearing_deg` (clockwise from the box front). The ring
+/// is numbered counter-clockwise with the front at index `NUM_LEDS - 1`, so a
+/// clockwise bearing walks the index backwards.
+fn ring_led(bearing_deg: u16) -> usize {
+    let steps = (bearing_deg as usize % 360) * NUM_LEDS / 360;
+    (NUM_LEDS - 1 + NUM_LEDS - steps) % NUM_LEDS
 }
 
 /// Flash the whole ring `color` twice (120 ms on / 120 ms off), then clear.
