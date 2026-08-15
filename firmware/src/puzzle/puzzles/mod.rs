@@ -3,6 +3,7 @@
 //! Each puzzle is a separate module that implements the [`Puzzle`] trait.
 
 pub mod directions;
+pub mod knock;
 pub mod waypoints;
 
 use super::events::{Action, PuzzleEvent};
