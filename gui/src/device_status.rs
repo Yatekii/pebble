@@ -10,11 +10,35 @@ use crate::ble::{DeviceStatusData, PeripheralStatusData};
 #[derive(IntoElement)]
 pub struct DeviceStatusPanel {
     status: Option<DeviceStatusData>,
+    /// Battery voltage in millivolts, if known.
+    battery_mv: Option<u16>,
 }
 
 impl DeviceStatusPanel {
-    pub fn new(status: Option<DeviceStatusData>) -> Self {
-        Self { status }
+    pub fn new(status: Option<DeviceStatusData>, battery_mv: Option<u16>) -> Self {
+        Self { status, battery_mv }
+    }
+
+    fn render_battery(&self, cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
+        let value = match self.battery_mv {
+            Some(mv) => format!("{:.2} V", mv as f32 / 1000.0),
+            None => "--".to_string(),
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .py_1()
+            .child(div().text_sm().text_color(theme.foreground).child("Battery"))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.foreground)
+                    .child(value),
+            )
     }
 }
 
@@ -42,6 +66,7 @@ impl RenderOnce for DeviceStatusPanel {
                     .mb_2()
                     .child("Device Status"),
             )
+            .child(self.render_battery(cx))
             .child(self.render_status_list(cx))
     }
 }

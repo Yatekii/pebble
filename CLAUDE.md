@@ -131,7 +131,12 @@ cargo fmt              # Apply formatting
 
 ### Sensor Orientation
 
-Both sensors are mounted with their Z-axis pointing DOWN (rotated 180° around the X-axis from the world frame).
+Both sensors have their Z-axis pointing DOWN (into the PCB). The board frame used in firmware is:
+- **+X**: toward LED 72
+- **+Y**: toward LED 18 (90° CCW from LED 72 when viewed from top)
+- **+Z**: up (out of PCB surface)
 
-- **BMI270 (accelerometer/gyroscope)**: Rotated 180° around X-axis + 90° CCW in XY plane. Uses `transform_bmi270()`.
-- **BMM350 (magnetometer)**: Rotated 180° around X-axis only. Uses `transform_bmm350()`.
+When flat, the accelerometer reads specific force (0, 0, +g) in board frame.
+
+- **BMM350 (magnetometer)**: Chip +y points away from LED 72; LED 72 is at chip −y. Transform: (sensor_x, sensor_y, sensor_z) → (−sensor_y, −sensor_x, −sensor_z). 180° rotation around the (X−Y)/√2 axis. Uses `transform_bmm350()`.
+- **BMI270 (accelerometer/gyroscope)**: Pin 1 is top-right on PCB; chip +x points toward LED 72 (verified empirically). Transform: (sensor_x, sensor_y, sensor_z) → (+sensor_x, −sensor_y, −sensor_z). 180° rotation around the X-axis. Uses `BMI270_TO_BOARD`.

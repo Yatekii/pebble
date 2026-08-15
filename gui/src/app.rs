@@ -40,6 +40,8 @@ pub struct ImuViewerApp {
     satellites_chunk_1: Vec<SatelliteInfo>,
     pcb_mesh: Option<Arc<Mesh3D>>,
     device_status: Option<DeviceStatusData>,
+    /// Latest battery voltage in millivolts.
+    battery_mv: Option<u16>,
 }
 
 impl ImuViewerApp {
@@ -113,6 +115,7 @@ impl ImuViewerApp {
             satellites_chunk_1: Vec::new(),
             pcb_mesh,
             device_status: None,
+            battery_mv: None,
         }
     }
 
@@ -158,6 +161,9 @@ impl ImuViewerApp {
             }
             BleMessage::DeviceStatus(status) => {
                 self.device_status = Some(status);
+            }
+            BleMessage::BatteryVoltage(mv) => {
+                self.battery_mv = Some(mv);
             }
             BleMessage::SatelliteChunk(chunk, satellites) => {
                 if chunk == 0 {
@@ -416,7 +422,7 @@ impl Render for ImuViewerApp {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(DeviceStatusPanel::new(self.device_status))
+                            .child(DeviceStatusPanel::new(self.device_status, self.battery_mv))
                             .child(
                                 div()
                                     .flex_1()

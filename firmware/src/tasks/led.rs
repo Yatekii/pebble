@@ -106,6 +106,10 @@ fn apply_color_chunk(leds: &mut LedStrip<'_>, colors: &[u8; 72], start_led: usiz
     }
 }
 
+/// Dead zone (degrees from the lit LED's center) before the compass indicator
+/// re-targets. Half an LED sector is 2.5°; a bit more absorbs heading jitter.
+const COMPASS_HYSTERESIS_DEG: usize = 4;
+
 /// Run the LED compass display task.
 ///
 /// Shows a compass indicator pointing to north and flashes the ring on
@@ -156,7 +160,21 @@ pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
             Either3::First(heading) => {
                 // Heading is CW from north. LED ring is numbered CCW (increasing index = CCW).
                 // heading=0 → index 71 (LED 72, front), heading=90 → index 17 (LED 18, left side).
-                compass_led = (NUM_LEDS - 1 + heading as usize * NUM_LEDS / 360) % NUM_LEDS;
+                //
+                // COMPASS_HEADING is the raw tilt-compensated mag heading with no
+                // temporal smoothing, so it jitters ±1-2°. Each LED spans 5°, so a
+                // heading sitting near a sector boundary would flip between two
+                // adjacent LEDs. Hysteresis: only re-target once the heading moves a
+                // dead zone (> half a sector) past the currently-lit LED's center.
+                let heading = heading as usize % 360;
+                let current_center = ((compass_led + 1) % NUM_LEDS) * 360 / NUM_LEDS;
+                let off = {
+                    let d = heading.abs_diff(current_center);
+                    if d > 180 { 360 - d } else { d }
+                };
+                if off > COMPASS_HYSTERESIS_DEG {
+                    compass_led = (NUM_LEDS - 1 + heading * NUM_LEDS / 360) % NUM_LEDS;
+                }
                 leds.set_brightness(255);
                 leds.clear();
                 leds.set(compass_led, Color::white());

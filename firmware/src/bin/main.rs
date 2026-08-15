@@ -12,7 +12,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
 use pebble::comms::ble::SensorServer;
-use pebble::hal::{gps, imu, led, servo};
+use pebble::hal::{battery, gps, imu, led, servo};
 use pebble::state::{
     DEVICE_STATUS, DeviceStatus, LED_COMMAND, LedCommand, PeripheralError, PeripheralStatus,
 };
@@ -206,6 +206,10 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
+    // Initialize battery voltage monitor on GPIO6 (ADC1).
+    let mut battery = battery::Battery::new(peripherals.ADC1, peripherals.GPIO6);
+    info!("Battery monitor initialized");
+
     // Initialize BLE
     let radio_init = match esp_radio::init() {
         Ok(init) => init,
@@ -272,11 +276,12 @@ async fn main(_spawner: Spawner) -> ! {
     // alongside the sensor/actuator/puzzle tasks.
     embassy_futures::join::join3(
         tasks::ble::run(server, peripheral, runner),
-        embassy_futures::join::join4(
+        embassy_futures::join::join5(
             tasks::imu::run(&imu, magnetometer.as_ref()),
             tasks::gps::run(&mut gps),
             tasks::servo::run(&mut servo),
             tasks::puzzle::run(),
+            tasks::battery::run(&mut battery),
         ),
         tasks::led::run_compass(&mut leds),
     )

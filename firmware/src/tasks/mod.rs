@@ -16,6 +16,7 @@
 //! ## Communication Tasks
 //! - [`ble`]: Handles BLE GATT writes for LED control
 
+pub mod battery;
 pub mod ble;
 pub mod gps;
 pub mod imu;

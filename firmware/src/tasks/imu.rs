@@ -7,6 +7,7 @@ use nalgebra::Vector3;
 use uom::si::magnetic_flux_density::microtesla;
 
 use crate::comms::ble::{AccBleData, AhrsBleData, GyroBleData, MagBleData};
+use crate::filter::ahrs::{AhrsFilter, GyroCalibration};
 use crate::hal::imu::bmi270::SharedBmi270;
 use crate::hal::imu::bmm350::{RAW_LSB_TO_UT_XY, RAW_LSB_TO_UT_Z, SharedBmm350};
 use crate::math::{BMI270_TO_BOARD, BMM350_TO_BOARD, tilt_compensated_heading};
@@ -16,6 +17,15 @@ use crate::state::{
 
 /// Sample period in milliseconds (100Hz = 10ms).
 const SAMPLE_PERIOD_MS: u64 = 10;
+
+/// BMI270 gyroscope scale at ±2000 dps range: 16.384 LSB per dps.
+const GYRO_LSB_TO_DPS: f32 = 1.0 / 16.384;
+/// Degrees → radians (Madgwick expects gyro in rad/s).
+const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+/// Heading offset (degrees) applied to the fused yaw so 0° aligns with the LED
+/// ring's north (board +X, LED 72). Tune on hardware; negate the fused yaw first
+/// if rotation runs the wrong way.
+const AHRS_HEADING_OFFSET_DEG: f32 = 0.0;
 
 /// EMA low-pass filter coefficient for the accelerometer used in tilt compensation.
 /// α = 1 − exp(−dt/τ) ≈ dt/τ.  With dt = 10 ms and τ = 50 ms → α ≈ 0.2.
@@ -52,10 +62,14 @@ const MAG_SOFT_IRON: [[f32; 3]; 3] = [
 // Tap / double-tap detection
 // =============================================================================
 
-/// Squared acceleration threshold for tap detection (raw LSB²).
+/// Squared angular-rate threshold for tap detection (raw gyro LSB²).
 ///
-/// 2.5 g × 4096 LSB/g = 10 240 LSB  →  10 240² = 104 857 600.
-const TAP_THRESHOLD_SQ: u32 = 10_240 * 10_240;
+/// Detection runs on the gyro (see the tap dispatch in `run`): a tap jolts the
+/// box rotationally, showing as a clean gyro spike, while resting noise is only
+/// a few dozen LSB. 300 LSB ÷ 16.384 ≈ 18 dps — comfortably above rest, below a
+/// tap peak (~500-850 LSB observed). Sustained rotation (handling) is rejected
+/// by `TAP_PEAK_MAX_TICKS`, not this threshold. Raise if handling false-triggers.
+const TAP_THRESHOLD_SQ: u32 = 300 * 300;
 
 /// Maximum spike duration for a valid tap impulse (samples at 100 Hz).
 ///
@@ -222,6 +236,12 @@ where
 
     let mut tap = TapDetector::new();
 
+    // Madgwick sensor fusion for a smooth, gyro-stabilised, drift-corrected
+    // orientation. Gyro bias is measured during a stationary warmup; until it's
+    // ready we fall back to the instantaneous tilt-compensated heading.
+    let mut ahrs = AhrsFilter::new();
+    let mut gyro_cal = GyroCalibration::new();
+
     loop {
         Timer::after(Duration::from_millis(SAMPLE_PERIOD_MS)).await;
 
@@ -295,9 +315,19 @@ where
                 * Vector3::new(raw_acc.x as f32, raw_acc.y as f32, raw_acc.z as f32);
             acc_lpf += ACC_LPF_ALPHA * (acc_raw - acc_lpf);
 
-            // Tap detection uses raw (un-LPF'd) data so the short impulse is visible.
-            // Magnitude is rotation-invariant so we skip the board-frame transform.
-            match tap.update(raw_acc.x, raw_acc.y, raw_acc.z) {
+            // Tap detection runs on the gyro, not the accel: at 100 Hz ODR the
+            // linear tap impulse is filtered down to ~1.3 g, but the rotational
+            // jolt of tapping the box shows as a large, clean gyro spike. Raw
+            // magnitude is frame-invariant so we skip the board-frame transform.
+            let raw_gyr = imu_data.raw_angular_velocity();
+            // TEMP tap tuning: log gyro spikes so we can confirm the threshold.
+            let dbg_sq = (raw_gyr.x as i32 * raw_gyr.x as i32) as u32
+                + (raw_gyr.y as i32 * raw_gyr.y as i32) as u32
+                + (raw_gyr.z as i32 * raw_gyr.z as i32) as u32;
+            if dbg_sq > 150 * 150 {
+                defmt::info!("gyro spike: ~{=u32} LSB (~{=u32} dps)", dbg_sq.isqrt(), dbg_sq.isqrt() * 1000 / 16384);
+            }
+            match tap.update(raw_gyr.x, raw_gyr.y, raw_gyr.z) {
                 TapResult::ImmediateTap => {
                     // Spike resolved — fire immediately for low-latency LED feedback.
                     // single_count is not yet incremented here; the count is just a
@@ -358,16 +388,35 @@ where
         // Board frame: +X toward LED 72, +Y toward LED 18, +Z up.
         let mag_board = BMM350_TO_BOARD * Vector3::new(x_cal, y_cal, z_cal);
 
-        // Tilt-compensated heading using accelerometer.
-        // When the IMU is unavailable, fall back to flat-plane heading.
-        let (heading_rad, roll_deg, pitch_deg) = if imu_result.is_ok() {
-            tilt_compensated_heading(acc_lpf, mag_board)
+        // Orientation: fuse gyro + accel + mag with Madgwick once gyro bias is
+        // calibrated; before that, and with no IMU, fall back to the
+        // instantaneous tilt-compensated heading.
+        let (roll_deg, pitch_deg, mut heading_deg) = if let Ok(imu_data) = &imu_result {
+            let raw_gyro = imu_data.raw_angular_velocity();
+            let gyro_rads = (BMI270_TO_BOARD
+                * Vector3::new(raw_gyro.x as f32, raw_gyro.y as f32, raw_gyro.z as f32))
+                * (GYRO_LSB_TO_DPS * DEG_TO_RAD);
+
+            if !gyro_cal.is_ready() {
+                gyro_cal.update(gyro_rads.x, gyro_rads.y, gyro_rads.z);
+            }
+
+            if gyro_cal.is_ready() {
+                let (gx, gy, gz) = gyro_cal.apply(gyro_rads.x, gyro_rads.y, gyro_rads.z);
+                // accel/mag normalized internally, so board-frame LPF accel and
+                // calibrated mag can be passed as-is.
+                let o = ahrs.update(Vector3::new(gx, gy, gz), acc_lpf, mag_board);
+                (o.roll, o.pitch, o.yaw + AHRS_HEADING_OFFSET_DEG)
+            } else {
+                let (h, r, p) = tilt_compensated_heading(acc_lpf, mag_board);
+                (r, p, h.to_degrees())
+            }
         } else {
             // Flat-plane fallback, heading CW from board +X (LED 72).
-            (libm::atan2f(mag_board.y, mag_board.x), 0.0_f32, 0.0_f32)
+            (0.0_f32, 0.0_f32, libm::atan2f(mag_board.y, mag_board.x).to_degrees())
         };
 
-        let mut heading_deg = heading_rad.to_degrees();
+        heading_deg = libm::fmodf(heading_deg, 360.0);
         if heading_deg < 0.0 {
             heading_deg += 360.0;
         }

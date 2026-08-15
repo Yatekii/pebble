@@ -18,7 +18,6 @@
 use ahrs::{Ahrs as AhrsTrait, Madgwick};
 use defmt::error;
 use nalgebra::Vector3;
-use uom::si::f32::{Acceleration, AngularVelocity, MagneticFluxDensity};
 
 use crate::math::quaternion_to_euler;
 
@@ -27,11 +26,12 @@ const SAMPLE_PERIOD: f32 = 0.01;
 
 /// Madgwick filter gain parameter.
 ///
-/// Higher values = faster convergence but more noise.
-/// Lower values = smoother but slower response.
-/// Typical range: 0.01 - 0.5.
-/// Using 0.8 to strongly trust magnetometer for heading correction.
-const BETA: f32 = 0.8;
+/// Trades gyro smoothing against accel/mag correction speed:
+/// higher = tracks accel/mag faster but passes their noise through;
+/// lower = smoother, gyro-dominated, slower to correct.
+/// Typical range: 0.01 - 0.5. Tune on hardware: too low drifts, too high
+/// reintroduces the magnetometer jitter this filter exists to remove.
+const BETA: f32 = 0.1;
 
 /// Orientation output from AHRS.
 ///
@@ -78,32 +78,21 @@ impl AhrsFilter {
         }
     }
 
-    /// Update the filter with 9-DOF MARG data (accelerometer + gyroscope + magnetometer).
+    /// Update the filter with 9-DOF MARG data, all in the same coordinate frame.
     ///
-    /// # Arguments
+    /// * `gyro` - angular velocity in rad/s
+    /// * `accel` - acceleration (any consistent unit; normalized internally)
+    /// * `mag` - magnetic field (any consistent unit; normalized internally)
     ///
-    /// * `acceleration` - Accelerometer readings (x, y, z)
-    /// * `angular_velocity` - Gyroscope readings (x, y, z)
-    /// * `magnetometer` - Magnetometer readings (x, y, z)
-    ///
-    /// # Returns
-    ///
-    /// The current orientation estimate as Euler angles.
-    pub fn update_marg(
+    /// Returns the current orientation estimate as Euler angles.
+    pub fn update(
         &mut self,
-        acceleration: Vector3<Acceleration>,
-        angular_velocity: Vector3<AngularVelocity>,
-        magnetometer: Vector3<MagneticFluxDensity>,
+        gyro: Vector3<f32>,
+        accel: Vector3<f32>,
+        mag: Vector3<f32>,
     ) -> Orientation {
-        let acceleration = acceleration.map(|a| a.value);
-        let angular_velocity = angular_velocity.map(|a| a.value);
-        let magnetometer = magnetometer.map(|m| m.value);
-
-        // Update filter (ignore error, filter still updates internal state)
-        if let Err(error) = self
-            .filter
-            .update(&angular_velocity, &acceleration, &magnetometer)
-        {
+        // Update filter (ignore error, filter still updates internal state).
+        if let Err(error) = self.filter.update(&gyro, &accel, &mag) {
             error!("Updating AHRS had an issue: {:?}", error);
         }
 

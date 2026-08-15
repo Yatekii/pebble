@@ -218,6 +218,9 @@ pub static SERVO_COMMAND: Watch<CriticalSectionRawMutex, ServoCommand, 2> = Watc
 /// Watch for broadcasting device status to BLE clients.
 pub static DEVICE_STATUS: Watch<CriticalSectionRawMutex, DeviceStatus, 2> = Watch::new();
 
+/// Watch for broadcasting battery voltage (millivolts) to BLE clients.
+pub static BATTERY_VOLTAGE: Watch<CriticalSectionRawMutex, u16, 2> = Watch::new();
+
 // --- Connection State ---
 
 /// Track number of active BLE connections.

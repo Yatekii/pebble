@@ -9,8 +9,8 @@ use trouble_host::prelude::*;
 use crate::comms::ble::{LedColorChunk, SensorServer};
 use crate::hal::led::{LED_STATE, LedState, NUM_LEDS};
 use crate::state::{
-    ACTIVE_CONNECTIONS, DEVICE_STATUS, GPS_DATA, LED_COLORS_0, LED_COLORS_1, LED_COLORS_2,
-    LED_COMMAND, LedCommand, SATELLITES_0, SATELLITES_1, SENSOR_DATA,
+    ACTIVE_CONNECTIONS, BATTERY_VOLTAGE, DEVICE_STATUS, GPS_DATA, LED_COLORS_0, LED_COLORS_1,
+    LED_COLORS_2, LED_COMMAND, LedCommand, SATELLITES_0, SATELLITES_1, SENSOR_DATA,
 };
 
 /// Advertising data for the BLE peripheral: flags + complete local name "Pebble".
@@ -303,6 +303,26 @@ pub async fn run<'srv, 'stack, C: Controller>(
                 }
             };
 
+            // Battery voltage notifications.
+            let battery_notify = async {
+                let Some(mut receiver) = BATTERY_VOLTAGE.receiver() else {
+                    error!("No battery voltage receiver slot available");
+                    return;
+                };
+                loop {
+                    let mv = receiver.changed().await;
+                    if server
+                        .sensor_service
+                        .battery_voltage
+                        .notify(&conn, &mv.to_le_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+
             // Any future completing/failing ends the connection.
             // Nested selects because `select` supports at most 5 futures.
             embassy_futures::select::select(
@@ -313,7 +333,11 @@ pub async fn run<'srv, 'stack, C: Controller>(
                     gps_notify,
                     status_notify,
                 ),
-                embassy_futures::select::select(satellites_0_notify, satellites_1_notify),
+                embassy_futures::select::select3(
+                    satellites_0_notify,
+                    satellites_1_notify,
+                    battery_notify,
+                ),
             )
             .await;
 

@@ -312,6 +312,12 @@ pub struct SensorService {
     #[descriptor(uuid = "2901", read, value = "Device Status")]
     #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefb", read, notify)]
     pub device_status: [u8; 16],
+
+    /// Battery voltage characteristic
+    /// 2 bytes: battery voltage in millivolts (u16, little-endian)
+    #[descriptor(uuid = "2901", read, value = "Battery Voltage")]
+    #[characteristic(uuid = "12345678-1234-5678-1234-56789abcdefe", read, notify)]
+    pub battery_voltage: [u8; 2],
 }
 
 /// GATT Server with Sensor Service

@@ -2,6 +2,7 @@
 //!
 //! This module provides low-level access to all hardware peripherals:
 //!
+//! - [`battery`]: Battery voltage monitoring via ADC
 //! - [`gps`]: MAX-M8Q GPS module via UART
 //! - [`imu`]: BMI270 IMU and BMM350 magnetometer via I2C
 //! - [`led`]: WS2812B LED ring via RMT
@@ -9,6 +10,7 @@
 //! - [`storage`]: Flash storage for persistent state
 //! - [`peripherals`]: Shared peripheral resources (I2C bus)
 
+pub mod battery;
 pub mod gps;
 pub mod imu;
 pub mod led;

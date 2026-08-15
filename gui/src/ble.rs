@@ -72,6 +72,11 @@ const SATELLITES_1_UUID: Uuid = Uuid::from_bytes([
     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfd,
 ]);
 
+/// UUID for battery voltage characteristic (2 bytes: u16 millivolts, little-endian)
+const BATTERY_VOLTAGE_UUID: Uuid = Uuid::from_bytes([
+    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xfe,
+]);
+
 /// BLE connection state
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectionState {
@@ -270,6 +275,8 @@ pub enum BleMessage {
     DeviceStatus(DeviceStatusData),
     /// Satellite info chunk (0 or 1)
     SatelliteChunk(u8, Vec<SatelliteInfo>),
+    /// Battery voltage in millivolts
+    BatteryVoltage(u16),
 }
 
 /// Shared state between BLE task and UI
@@ -448,6 +455,9 @@ async fn run_ble_client(
         let status_char = characteristics
             .iter()
             .find(|c| c.uuid == DEVICE_STATUS_UUID);
+        let battery_char = characteristics
+            .iter()
+            .find(|c| c.uuid == BATTERY_VOLTAGE_UUID);
 
         // Subscribe to notifications.
         for (name, ch) in [
@@ -462,6 +472,7 @@ async fn run_ble_client(
             ("LED1", led1_char),
             ("LED2", led2_char),
             ("DeviceStatus", status_char),
+            ("BatteryVoltage", battery_char),
         ] {
             match ch {
                 Some(ch) => match device.subscribe(ch).await {
@@ -653,6 +664,12 @@ async fn run_ble_client(
                     eprintln!("Satellites1 received: {} satellites", satellites.len());
                 }
                 let _ = tx.send(BleMessage::SatelliteChunk(1, satellites));
+            } else if notification.uuid == BATTERY_VOLTAGE_UUID && notification.value.len() >= 2 {
+                let mv = u16::from_le_bytes([notification.value[0], notification.value[1]]);
+                if notification_count <= 20 || notification_count % 100 == 0 {
+                    eprintln!("Battery received: {} mV", mv);
+                }
+                let _ = tx.send(BleMessage::BatteryVoltage(mv));
             }
         }
 

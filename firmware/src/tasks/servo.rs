@@ -46,12 +46,12 @@ pub async fn run(servo: &mut Option<Servo<'_>>) -> ! {
     }
 }
 
-/// Open angle for the servo (180° = box open).
-const OPEN_ANGLE: u8 = 180;
+/// Close angle for the servo (0° = box closed).
+const CLOSE_ANGLE: u8 = 0;
 
 /// Run the servo demonstration task.
 ///
-/// Holds the servo at the open position. For testing/demo purposes only.
+/// Holds the servo at the closed position. For testing/demo purposes only.
 pub async fn run_demo(servo: &mut Option<Servo<'_>>) -> ! {
     let Some(servo) = servo.as_mut() else {
         info!("Servo demo task disabled (no servo hardware)");
@@ -60,10 +60,10 @@ pub async fn run_demo(servo: &mut Option<Servo<'_>>) -> ! {
         }
     };
 
-    if let Err(e) = servo.set_angle(OPEN_ANGLE) {
+    if let Err(e) = servo.set_angle(CLOSE_ANGLE) {
         error!("Servo error: {:?}", e);
     } else {
-        info!("Servo set to open ({} degrees)", OPEN_ANGLE);
+        info!("Servo set to close ({} degrees)", CLOSE_ANGLE);
     }
 
     loop {
