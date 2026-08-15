@@ -4,14 +4,11 @@
 //! and updates the LED ring accordingly.
 
 use defmt::{error, info};
-use embassy_futures::select::{Either3, select3};
 use embassy_time::{Duration, Timer};
 
 use crate::hal::led::{Color, LedStrip, NUM_LEDS};
-use crate::state::{
-    COMPASS_HEADING, DOUBLE_TAP_EVENT, IMMEDIATE_TAP_EVENT, LED_COLORS_0, LED_COLORS_1,
-    LED_COLORS_2, LED_COMMAND,
-};
+use crate::puzzle::events::LedPattern;
+use crate::state::{LED_COLORS_0, LED_COLORS_1, LED_COLORS_2, LED_COMMAND, PUZZLE_LED};
 
 /// Special LED index values.
 const LED_INDEX_BRIGHTNESS_ONLY: u8 = 0xFE;
@@ -106,107 +103,76 @@ fn apply_color_chunk(leds: &mut LedStrip<'_>, colors: &[u8; 72], start_led: usiz
     }
 }
 
-/// Dead zone (degrees from the lit LED's center) before the compass indicator
-/// re-targets. Half an LED sector is 2.5°; a bit more absorbs heading jitter.
-const COMPASS_HYSTERESIS_DEG: usize = 4;
-
-/// Run the LED compass display task.
+/// Run the puzzle LED task.
 ///
-/// Shows a compass indicator pointing to north and flashes the ring on
-/// tap events: once for a single tap, twice for a double tap.
-pub async fn run_compass(leds: &mut Option<LedStrip<'_>>) -> ! {
+/// Renders the active puzzle's ring feedback published on [`PUZZLE_LED`]:
+/// a blue fill arc while a direction is being held, and green/red flashes on
+/// correct/wrong. Replaces the old standalone north-compass demo.
+pub async fn run_puzzle(leds: &mut Option<LedStrip<'_>>) -> ! {
     let Some(leds) = leds.as_mut() else {
-        info!("LED compass task disabled (no LED hardware)");
+        info!("LED puzzle task disabled (no LED hardware)");
         loop {
             embassy_futures::yield_now().await;
         }
     };
 
-    let Some(mut heading_receiver) = COMPASS_HEADING.receiver() else {
-        error!("No compass heading receiver slot available");
+    let Some(mut rx) = PUZZLE_LED.receiver() else {
+        error!("No PUZZLE_LED receiver slot available");
         loop {
             embassy_futures::yield_now().await;
         }
     };
-    let Some(mut tap_receiver) = IMMEDIATE_TAP_EVENT.receiver() else {
-        error!("No IMMEDIATE_TAP_EVENT receiver slot available");
-        loop {
-            embassy_futures::yield_now().await;
-        }
-    };
-    let Some(mut double_tap_receiver) = DOUBLE_TAP_EVENT.receiver() else {
-        error!("No DOUBLE_TAP_EVENT receiver slot available");
-        loop {
-            embassy_futures::yield_now().await;
-        }
-    };
-    // Initialize compass display
-    leds.set_brightness(255);
+
+    leds.set_brightness(0);
     leds.clear();
     let _ = leds.show();
 
-    info!("LED compass task started");
-
-    let mut compass_led: usize = 0;
+    info!("LED puzzle task started");
 
     loop {
-        match select3(
-            heading_receiver.changed(),
-            tap_receiver.changed(),
-            double_tap_receiver.changed(),
-        )
-        .await
-        {
-            Either3::First(heading) => {
-                // Heading is CW from north. LED ring is numbered CCW (increasing index = CCW).
-                // heading=0 → index 71 (LED 72, front), heading=90 → index 17 (LED 18, left side).
-                //
-                // COMPASS_HEADING is the raw tilt-compensated mag heading with no
-                // temporal smoothing, so it jitters ±1-2°. Each LED spans 5°, so a
-                // heading sitting near a sector boundary would flip between two
-                // adjacent LEDs. Hysteresis: only re-target once the heading moves a
-                // dead zone (> half a sector) past the currently-lit LED's center.
-                let heading = heading as usize % 360;
-                let current_center = ((compass_led + 1) % NUM_LEDS) * 360 / NUM_LEDS;
-                let off = {
-                    let d = heading.abs_diff(current_center);
-                    if d > 180 { 360 - d } else { d }
-                };
-                if off > COMPASS_HYSTERESIS_DEG {
-                    compass_led = (NUM_LEDS - 1 + heading * NUM_LEDS / 360) % NUM_LEDS;
-                }
-                leds.set_brightness(255);
-                leds.clear();
-                leds.set(compass_led, Color::white());
-                if let Err(_e) = leds.show() {
-                    error!("Failed to update compass LEDs");
-                }
-            }
-
-            Either3::Second(_) | Either3::Third(_) => {
-                flash(leds).await;
-                restore_compass(leds, compass_led);
-            }
-        }
+        let pattern = rx.changed().await;
+        render(leds, pattern).await;
     }
 }
 
-/// Flash all LEDs white once (80 ms on / 80 ms off).
-async fn flash(leds: &mut LedStrip<'_>) {
-    leds.set_brightness(255);
-    leds.set_all(Color::white());
-    let _ = leds.show();
-    Timer::after(Duration::from_millis(80)).await;
-
-    leds.clear();
-    let _ = leds.show();
-    Timer::after(Duration::from_millis(80)).await;
+/// Render one puzzle [`LedPattern`] to the ring.
+async fn render(leds: &mut LedStrip<'_>, pattern: LedPattern) {
+    match pattern {
+        LedPattern::Off => {
+            leds.set_brightness(0);
+            leds.clear();
+        }
+        LedPattern::Solid { r, g, b } | LedPattern::Pulse { r, g, b, .. } => {
+            leds.set_brightness(255);
+            leds.set_all(Color::new(r, g, b));
+        }
+        LedPattern::Progress { percent, r, g, b } => {
+            let lit = (percent.min(100) as usize * NUM_LEDS).div_ceil(100);
+            leds.set_brightness(255);
+            leds.clear();
+            for i in 0..lit {
+                leds.set(i, Color::new(r, g, b));
+            }
+        }
+        LedPattern::Success => return flash_twice(leds, Color::green()).await,
+        LedPattern::Error => return flash_twice(leds, Color::red()).await,
+        // Compass rendering arrives with the waypoint puzzle.
+        LedPattern::Compass { .. } => return,
+    }
+    if leds.show().is_err() {
+        error!("Failed to update puzzle LEDs");
+    }
 }
 
-/// Restore the single compass LED after a flash.
-fn restore_compass(leds: &mut LedStrip<'_>, compass_led: usize) {
+/// Flash the whole ring `color` twice (120 ms on / 120 ms off), then clear.
+async fn flash_twice(leds: &mut LedStrip<'_>, color: Color) {
     leds.set_brightness(255);
-    leds.clear();
-    leds.set(compass_led, Color::white());
-    let _ = leds.show();
+    for _ in 0..2 {
+        leds.set_all(color);
+        let _ = leds.show();
+        Timer::after(Duration::from_millis(120)).await;
+        leds.clear();
+        let _ = leds.show();
+        Timer::after(Duration::from_millis(120)).await;
+    }
 }

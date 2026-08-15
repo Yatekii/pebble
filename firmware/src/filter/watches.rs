@@ -26,6 +26,7 @@ use embassy_sync::watch::Watch;
 use crate::comms::ble::{
     AccBleData, AhrsBleData, GpsBleData, GyroBleData, MagBleData, SatelliteChunk,
 };
+use crate::puzzle::events::LedPattern;
 
 // =============================================================================
 // Sensor Data Types
@@ -212,6 +213,10 @@ pub static LED_COLORS_2: Watch<CriticalSectionRawMutex, [u8; 72], 2> = Watch::ne
 
 /// Watch for servo commands.
 pub static SERVO_COMMAND: Watch<CriticalSectionRawMutex, ServoCommand, 2> = Watch::new();
+
+/// Ring feedback for the active puzzle. The control layer publishes an
+/// [`LedPattern`]; the LED task renders it (fill arc, success/error flashes).
+pub static PUZZLE_LED: Watch<CriticalSectionRawMutex, LedPattern, 2> = Watch::new();
 
 // --- Status ---
 

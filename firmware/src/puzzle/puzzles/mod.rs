@@ -2,7 +2,7 @@
 //!
 //! Each puzzle is a separate module that implements the [`Puzzle`] trait.
 
-pub mod compass_align;
+pub mod directions;
 
 use super::events::{Action, PuzzleEvent};
 use super::state_machine::PuzzleState;

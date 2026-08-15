@@ -2,30 +2,23 @@
 //!
 //! Owns the [`PuzzleStateMachine`], turns sensor/tap watch updates into
 //! [`PuzzleEvent`]s, feeds them to the active puzzle, and bridges the returned
-//! [`Action`]s onto the hardware command watches (`SERVO_COMMAND`, `LED_COMMAND`).
+//! [`Action`]s onto the hardware watches (`SERVO_COMMAND` for the lock,
+//! `PUZZLE_LED` for the ring).
 //!
-//! Scope note: only [`CompassAlignPuzzle`] exists today, so only that arm is
-//! wired. `LocationFind`/`TiltSequence` + proper enum dispatch land in #7, GPS
-//! folding into `DeviceState` in #5, and the real LED ring renderer in #8/#10.
+//! Scope note: only [`DirectionsPuzzle`] is wired today. `Waypoints` (GPS
+//! geofences) and `Knock` (rhythm) land in their own PRs; until then those
+//! states are inert.
 
 use defmt::{error, info};
 use embassy_futures::select::{Either3, select3};
 
 use crate::filter::device_state::DeviceState;
-use crate::puzzle::events::{Action, LedPattern, PuzzleEvent, ServoPosition};
-use crate::puzzle::puzzles::compass_align::CompassAlignPuzzle;
+use crate::puzzle::events::{Action, PuzzleEvent, ServoPosition};
+use crate::puzzle::puzzles::directions::{self, DirectionsPuzzle};
 use crate::puzzle::state_machine::{PuzzleId, PuzzleStateMachine};
 use crate::state::{
-    COMPASS_HEADING, DOUBLE_TAP_EVENT, LED_COMMAND, LedCommand, SERVO_COMMAND, ServoCommand,
-    TAP_EVENT,
+    COMPASS_HEADING, DOUBLE_TAP_EVENT, PUZZLE_LED, SERVO_COMMAND, ServoCommand, TAP_EVENT,
 };
-
-/// Apply to all LEDs (mirrors `tasks::led::LED_INDEX_ALL_LEDS`).
-const LED_INDEX_ALL_LEDS: u8 = 0xFF;
-
-/// Target heading for the compass-alignment puzzle, in degrees (0-359).
-// ponytail: hard-coded secret; move to flash/config if puzzles need per-box targets.
-const COMPASS_TARGET_HEADING: u16 = 0;
 
 /// Run the puzzle state machine, dispatching events and bridging actions.
 pub async fn run() -> ! {
@@ -43,11 +36,10 @@ pub async fn run() -> ! {
     };
 
     let mut machine = PuzzleStateMachine::new();
-    let mut compass = CompassAlignPuzzle::new(COMPASS_TARGET_HEADING);
+    let mut directions = DirectionsPuzzle::new(&directions::TEST_SEQUENCE);
 
     // ponytail: single tap is a global open/close toggle, so it never reaches the
-    // FSM as puzzle input. If puzzles ever need single-tap input, gate this on
-    // machine.current_puzzle() == PuzzleId::Unlocked instead.
+    // FSM as puzzle input. The Knock puzzle PR will gate this on the active state.
     let mut box_open = false;
 
     info!(
@@ -81,11 +73,10 @@ pub async fn run() -> ! {
             Either3::Third(_) => PuzzleEvent::DoubleTap,
         };
 
-        // Dispatch to the active puzzle. Only CompassAlign is implemented; the
-        // rest arrive with #7's enum dispatch.
+        // Dispatch to the active puzzle. Only Directions is wired today.
         let action = match machine.current_puzzle() {
-            PuzzleId::CompassAlign => machine.handle_event(&mut compass, event),
-            PuzzleId::LocationFind | PuzzleId::TiltSequence | PuzzleId::Unlocked => None,
+            PuzzleId::Directions => machine.handle_event(&mut directions, event),
+            PuzzleId::Waypoints | PuzzleId::Knock | PuzzleId::Unlocked => None,
         };
 
         if let Some(action) = action {
@@ -94,16 +85,14 @@ pub async fn run() -> ! {
     }
 }
 
-/// Bridge a puzzle [`Action`] onto the hardware command watches.
+/// Bridge a puzzle [`Action`] onto the hardware watches.
 fn apply_action(action: Action) {
     match action {
         Action::MoveServo(pos) => {
             SERVO_COMMAND.sender().send(ServoCommand { angle: servo_angle(pos) });
         }
         Action::SetLeds(pattern) => {
-            if let Some(cmd) = led_command(pattern) {
-                LED_COMMAND.sender().send(cmd);
-            }
+            PUZZLE_LED.sender().send(pattern);
         }
         // Completion is turned into servo/LED actions inside the state machine;
         // hints are speculative (no consumer yet).
@@ -118,27 +107,6 @@ fn servo_angle(pos: ServoPosition) -> u8 {
         ServoPosition::Unlocked => 180,
         ServoPosition::Angle(a) => a,
     }
-}
-
-/// Map the whole-ring LED patterns to an all-LEDs command. Ring-relative
-/// patterns (`Compass`, `Progress`) need the dedicated renderer from #8/#10 and
-/// are skipped here.
-fn led_command(pattern: LedPattern) -> Option<LedCommand> {
-    let (r, g, b) = match pattern {
-        LedPattern::Off => (0, 0, 0),
-        LedPattern::Solid { r, g, b } => (r, g, b),
-        LedPattern::Pulse { r, g, b, .. } => (r, g, b),
-        LedPattern::Success => (0, 255, 0),
-        LedPattern::Error => (255, 0, 0),
-        LedPattern::Compass { .. } | LedPattern::Progress { .. } => return None,
-    };
-    Some(LedCommand {
-        brightness: 255,
-        led_index: LED_INDEX_ALL_LEDS,
-        r,
-        g,
-        b,
-    })
 }
 
 /// Park forever when a required watch slot is unavailable.

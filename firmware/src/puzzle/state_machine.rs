@@ -14,14 +14,14 @@ pub const NUM_PUZZLES: usize = 3;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(u8)]
 pub enum PuzzleId {
-    /// First puzzle: align compass to target heading.
+    /// First puzzle: point the box through a secret compass sequence.
     #[default]
-    CompassAlign = 0,
-    /// Second puzzle: navigate to GPS coordinates.
-    LocationFind = 1,
-    /// Third puzzle: perform tilt sequence.
-    TiltSequence = 2,
-    /// Final puzzle: box unlocked!
+    Directions = 0,
+    /// Second puzzle: knock a rhythm on the box.
+    Knock = 1,
+    /// Third puzzle: navigate to GPS waypoints — the final waypoint opens the box.
+    Waypoints = 2,
+    /// Final state: box unlocked!
     Unlocked = 3,
 }
 
@@ -29,9 +29,9 @@ impl PuzzleId {
     /// Get the next puzzle in sequence.
     pub fn next(self) -> Option<Self> {
         match self {
-            PuzzleId::CompassAlign => Some(PuzzleId::LocationFind),
-            PuzzleId::LocationFind => Some(PuzzleId::TiltSequence),
-            PuzzleId::TiltSequence => Some(PuzzleId::Unlocked),
+            PuzzleId::Directions => Some(PuzzleId::Knock),
+            PuzzleId::Knock => Some(PuzzleId::Waypoints),
+            PuzzleId::Waypoints => Some(PuzzleId::Unlocked),
             PuzzleId::Unlocked => None,
         }
     }
@@ -39,9 +39,9 @@ impl PuzzleId {
     /// Convert from u8 for deserialization.
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
-            0 => Some(PuzzleId::CompassAlign),
-            1 => Some(PuzzleId::LocationFind),
-            2 => Some(PuzzleId::TiltSequence),
+            0 => Some(PuzzleId::Directions),
+            1 => Some(PuzzleId::Knock),
+            2 => Some(PuzzleId::Waypoints),
             3 => Some(PuzzleId::Unlocked),
             _ => None,
         }
@@ -113,7 +113,7 @@ impl PuzzleStateMachine {
     /// Create a new state machine starting at the first puzzle.
     pub fn new() -> Self {
         Self {
-            current_puzzle: PuzzleId::CompassAlign,
+            current_puzzle: PuzzleId::Directions,
             puzzle_states: [PuzzleState::default(); NUM_PUZZLES],
             dirty: false,
         }
@@ -123,7 +123,7 @@ impl PuzzleStateMachine {
     pub fn from_saved(saved: SavedProgress) -> Self {
         Self {
             current_puzzle: PuzzleId::from_u8(saved.current_puzzle)
-                .unwrap_or(PuzzleId::CompassAlign),
+                .unwrap_or(PuzzleId::Directions),
             puzzle_states: saved.puzzle_states,
             dirty: false,
         }
@@ -208,7 +208,7 @@ impl PuzzleStateMachine {
 
     /// Reset all progress.
     pub fn reset(&mut self) {
-        self.current_puzzle = PuzzleId::CompassAlign;
+        self.current_puzzle = PuzzleId::Directions;
         self.puzzle_states = [PuzzleState::default(); NUM_PUZZLES];
         self.dirty = true;
     }
@@ -226,17 +226,17 @@ mod tests {
 
     #[test]
     fn test_puzzle_id_next() {
-        assert_eq!(PuzzleId::CompassAlign.next(), Some(PuzzleId::LocationFind));
-        assert_eq!(PuzzleId::LocationFind.next(), Some(PuzzleId::TiltSequence));
-        assert_eq!(PuzzleId::TiltSequence.next(), Some(PuzzleId::Unlocked));
+        assert_eq!(PuzzleId::Directions.next(), Some(PuzzleId::Knock));
+        assert_eq!(PuzzleId::Knock.next(), Some(PuzzleId::Waypoints));
+        assert_eq!(PuzzleId::Waypoints.next(), Some(PuzzleId::Unlocked));
         assert_eq!(PuzzleId::Unlocked.next(), None);
     }
 
     #[test]
     fn test_puzzle_id_from_u8() {
-        assert_eq!(PuzzleId::from_u8(0), Some(PuzzleId::CompassAlign));
-        assert_eq!(PuzzleId::from_u8(1), Some(PuzzleId::LocationFind));
-        assert_eq!(PuzzleId::from_u8(2), Some(PuzzleId::TiltSequence));
+        assert_eq!(PuzzleId::from_u8(0), Some(PuzzleId::Directions));
+        assert_eq!(PuzzleId::from_u8(1), Some(PuzzleId::Knock));
+        assert_eq!(PuzzleId::from_u8(2), Some(PuzzleId::Waypoints));
         assert_eq!(PuzzleId::from_u8(3), Some(PuzzleId::Unlocked));
         assert_eq!(PuzzleId::from_u8(4), None);
         assert_eq!(PuzzleId::from_u8(255), None);
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn test_state_machine_new() {
         let sm = PuzzleStateMachine::new();
-        assert_eq!(sm.current_puzzle(), PuzzleId::CompassAlign);
+        assert_eq!(sm.current_puzzle(), PuzzleId::Directions);
         assert!(!sm.needs_save());
     }
 
@@ -272,7 +272,7 @@ mod tests {
     fn test_state_machine_reset() {
         let mut sm = PuzzleStateMachine::new();
         sm.reset();
-        assert_eq!(sm.current_puzzle(), PuzzleId::CompassAlign);
+        assert_eq!(sm.current_puzzle(), PuzzleId::Directions);
         assert!(sm.needs_save());
     }
 
@@ -284,8 +284,8 @@ mod tests {
         saved.puzzle_states[1].completed = true;
 
         let sm = PuzzleStateMachine::from_saved(saved);
-        assert_eq!(sm.current_puzzle(), PuzzleId::TiltSequence);
-        assert!(sm.puzzle_state(PuzzleId::CompassAlign).completed);
-        assert!(sm.puzzle_state(PuzzleId::LocationFind).completed);
+        assert_eq!(sm.current_puzzle(), PuzzleId::Waypoints);
+        assert!(sm.puzzle_state(PuzzleId::Directions).completed);
+        assert!(sm.puzzle_state(PuzzleId::Knock).completed);
     }
 }
