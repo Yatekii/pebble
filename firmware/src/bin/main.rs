@@ -107,15 +107,27 @@ async fn main(_spawner: Spawner) -> ! {
         }
     };
 
-    // Initialize IMU on shared bus
-    let imu = match imu::bmi270::SharedBmi270::new(shared_i2c, &mut delay) {
-        Ok(imu) => {
-            info!("IMU initialized successfully");
-            device_status.imu = PeripheralStatus::Ok;
-            imu
+    // Initialize IMU on shared bus (with retries; the bus can time out on a
+    // cold boot, so reinitialize a few times before giving up).
+    let imu = {
+        let mut imu = None;
+        for attempt in 1..=5 {
+            match imu::bmi270::SharedBmi270::new(shared_i2c, &mut delay) {
+                Ok(dev) => {
+                    info!("IMU initialized successfully");
+                    device_status.imu = PeripheralStatus::Ok;
+                    imu = Some(dev);
+                    break;
+                }
+                Err(e) => {
+                    info!("Failed to initialize IMU (attempt {}): {:?}", attempt, e);
+                    delay.delay_ms(100);
+                }
+            }
         }
-        Err(e) => {
-            defmt::panic!("Failed to initialize IMU: {:?}", e);
+        match imu {
+            Some(imu) => imu,
+            None => defmt::panic!("Failed to initialize IMU after retries"),
         }
     };
 
@@ -263,7 +275,7 @@ async fn main(_spawner: Spawner) -> ! {
         embassy_futures::join::join4(
             tasks::imu::run(&imu, magnetometer.as_ref()),
             tasks::gps::run(&mut gps),
-            tasks::servo::run(&mut servo),
+            tasks::servo::run_demo(&mut servo),
             tasks::puzzle::run(),
         ),
         tasks::led::run_compass(&mut leds),
