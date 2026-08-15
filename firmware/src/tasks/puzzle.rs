@@ -45,6 +45,11 @@ pub async fn run() -> ! {
     let mut machine = PuzzleStateMachine::new();
     let mut compass = CompassAlignPuzzle::new(COMPASS_TARGET_HEADING);
 
+    // ponytail: single tap is a global open/close toggle, so it never reaches the
+    // FSM as puzzle input. If puzzles ever need single-tap input, gate this on
+    // machine.current_puzzle() == PuzzleId::Unlocked instead.
+    let mut box_open = false;
+
     info!(
         "Puzzle task started (puzzle {})",
         machine.current_puzzle() as u8
@@ -62,7 +67,17 @@ pub async fn run() -> ! {
                 heading,
                 ..Default::default()
             }),
-            Either3::Second(_) => PuzzleEvent::Tap,
+            Either3::Second(_) => {
+                box_open = !box_open;
+                let pos = if box_open {
+                    ServoPosition::Unlocked
+                } else {
+                    ServoPosition::Locked
+                };
+                info!("Tap toggle: box {}", if box_open { "open" } else { "closed" });
+                apply_action(Action::MoveServo(pos));
+                continue;
+            }
             Either3::Third(_) => PuzzleEvent::DoubleTap,
         };
 
@@ -100,7 +115,7 @@ fn apply_action(action: Action) {
 fn servo_angle(pos: ServoPosition) -> u8 {
     match pos {
         ServoPosition::Locked => 0,
-        ServoPosition::Unlocked => 90,
+        ServoPosition::Unlocked => 180,
         ServoPosition::Angle(a) => a,
     }
 }

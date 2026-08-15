@@ -275,7 +275,7 @@ async fn main(_spawner: Spawner) -> ! {
         embassy_futures::join::join4(
             tasks::imu::run(&imu, magnetometer.as_ref()),
             tasks::gps::run(&mut gps),
-            tasks::servo::run_demo(&mut servo),
+            tasks::servo::run(&mut servo),
             tasks::puzzle::run(),
         ),
         tasks::led::run_compass(&mut leds),
