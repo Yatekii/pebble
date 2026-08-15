@@ -10,15 +10,16 @@
 //! states are inert.
 
 use defmt::{error, info};
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either4, select4};
 
-use crate::filter::device_state::DeviceState;
+use crate::filter::device_state::{DeviceState, GpsPosition};
 use crate::puzzle::events::{Action, PuzzleEvent, ServoPosition};
 use crate::puzzle::puzzles::directions::{self, DirectionsPuzzle};
-use crate::puzzle::state_machine::{PuzzleId, PuzzleStateMachine};
+use crate::puzzle::puzzles::waypoints::{self, WaypointsPuzzle};
 use crate::state::{
-    COMPASS_HEADING, DOUBLE_TAP_EVENT, PUZZLE_LED, SERVO_COMMAND, ServoCommand, TAP_EVENT,
+    COMPASS_HEADING, DOUBLE_TAP_EVENT, GPS_DATA, PUZZLE_LED, SERVO_COMMAND, ServoCommand, TAP_EVENT,
 };
+use crate::puzzle::state_machine::{PuzzleId, PuzzleStateMachine};
 
 /// Run the puzzle state machine, dispatching events and bridging actions.
 pub async fn run() -> ! {
@@ -34,9 +35,18 @@ pub async fn run() -> ! {
         error!("No DOUBLE_TAP_EVENT receiver slot for puzzle task");
         idle().await
     };
+    let Some(mut gps_rx) = GPS_DATA.receiver() else {
+        error!("No GPS_DATA receiver slot for puzzle task");
+        idle().await
+    };
 
     let mut machine = PuzzleStateMachine::new();
     let mut directions = DirectionsPuzzle::new(&directions::TEST_SEQUENCE);
+    let mut waypoints = WaypointsPuzzle::new(&waypoints::TEST_WAYPOINTS);
+
+    // Latest sensor values, so every event carries a full device state.
+    let mut heading = 0u16;
+    let mut position: Option<GpsPosition> = None;
 
     // ponytail: single tap is a global open/close toggle, so it never reaches the
     // FSM as puzzle input. The Knock puzzle PR will gate this on the active state.
@@ -48,18 +58,30 @@ pub async fn run() -> ! {
     );
 
     loop {
-        let event = match select3(
+        let event = match select4(
             heading_rx.changed(),
+            gps_rx.changed(),
             tap_rx.changed(),
             double_tap_rx.changed(),
         )
         .await
         {
-            Either3::First(heading) => PuzzleEvent::DeviceStateChanged(DeviceState {
-                heading,
-                ..Default::default()
-            }),
-            Either3::Second(_) => {
+            Either4::First(h) => {
+                heading = h;
+                device_state_event(heading, position)
+            }
+            Either4::Second(gps) => {
+                // Only trust a position with a fix; drop it otherwise.
+                position = gps.has_fix.then_some(GpsPosition {
+                    latitude: gps.latitude as f64,
+                    longitude: gps.longitude as f64,
+                    altitude: gps.altitude,
+                    satellites: gps.satellites,
+                    has_fix: true,
+                });
+                device_state_event(heading, position)
+            }
+            Either4::Third(_) => {
                 box_open = !box_open;
                 let pos = if box_open {
                     ServoPosition::Unlocked
@@ -70,19 +92,29 @@ pub async fn run() -> ! {
                 apply_action(Action::MoveServo(pos));
                 continue;
             }
-            Either3::Third(_) => PuzzleEvent::DoubleTap,
+            Either4::Fourth(_) => PuzzleEvent::DoubleTap,
         };
 
-        // Dispatch to the active puzzle. Only Directions is wired today.
+        // Dispatch to the active puzzle. Knock lands in its own PR.
         let action = match machine.current_puzzle() {
             PuzzleId::Directions => machine.handle_event(&mut directions, event),
-            PuzzleId::Waypoints | PuzzleId::Knock | PuzzleId::Unlocked => None,
+            PuzzleId::Waypoints => machine.handle_event(&mut waypoints, event),
+            PuzzleId::Knock | PuzzleId::Unlocked => None,
         };
 
         if let Some(action) = action {
             apply_action(action);
         }
     }
+}
+
+/// Build a device-state event from the latest heading and position.
+fn device_state_event(heading: u16, position: Option<GpsPosition>) -> PuzzleEvent {
+    PuzzleEvent::DeviceStateChanged(DeviceState {
+        heading,
+        position,
+        ..Default::default()
+    })
 }
 
 /// Bridge a puzzle [`Action`] onto the hardware watches.
