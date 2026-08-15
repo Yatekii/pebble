@@ -5,21 +5,27 @@
 //! [`Action`]s onto the hardware watches (`SERVO_COMMAND` for the lock,
 //! `PUZZLE_LED` for the ring).
 //!
-//! Scope note: only [`DirectionsPuzzle`] is wired today. `Waypoints` (GPS
-//! geofences) and `Knock` (rhythm) land in their own PRs; until then those
-//! states are inert.
+//! Knock timing lives here: the knock puzzle wants every spike, so it reads the
+//! raw `IMMEDIATE_TAP_EVENT` stream (not single/double-tap classification) and
+//! this task attaches inter-knock gaps plus a quiet-period finalize timeout.
 
 use defmt::{error, info};
-use embassy_futures::select::{Either4, select4};
+use embassy_futures::select::{Either, Either4, select, select4};
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::filter::device_state::{DeviceState, GpsPosition};
 use crate::puzzle::events::{Action, PuzzleEvent, ServoPosition};
 use crate::puzzle::puzzles::directions::{self, DirectionsPuzzle};
+use crate::puzzle::puzzles::knock::{self, KnockPuzzle, START_GAP};
 use crate::puzzle::puzzles::waypoints::{self, WaypointsPuzzle};
-use crate::state::{
-    COMPASS_HEADING, DOUBLE_TAP_EVENT, GPS_DATA, PUZZLE_LED, SERVO_COMMAND, ServoCommand, TAP_EVENT,
-};
 use crate::puzzle::state_machine::{PuzzleId, PuzzleStateMachine};
+use crate::state::{
+    COMPASS_HEADING, GPS_DATA, IMMEDIATE_TAP_EVENT, PUZZLE_LED, SERVO_COMMAND, ServoCommand,
+    TAP_EVENT,
+};
+
+/// Quiet time after the last knock that ends a knock attempt.
+const KNOCK_FINALIZE: Duration = Duration::from_millis(2000);
 
 /// Run the puzzle state machine, dispatching events and bridging actions.
 pub async fn run() -> ! {
@@ -27,29 +33,34 @@ pub async fn run() -> ! {
         error!("No COMPASS_HEADING receiver slot for puzzle task");
         idle().await
     };
+    let Some(mut gps_rx) = GPS_DATA.receiver() else {
+        error!("No GPS_DATA receiver slot for puzzle task");
+        idle().await
+    };
     let Some(mut tap_rx) = TAP_EVENT.receiver() else {
         error!("No TAP_EVENT receiver slot for puzzle task");
         idle().await
     };
-    let Some(mut double_tap_rx) = DOUBLE_TAP_EVENT.receiver() else {
-        error!("No DOUBLE_TAP_EVENT receiver slot for puzzle task");
-        idle().await
-    };
-    let Some(mut gps_rx) = GPS_DATA.receiver() else {
-        error!("No GPS_DATA receiver slot for puzzle task");
+    let Some(mut knock_rx) = IMMEDIATE_TAP_EVENT.receiver() else {
+        error!("No IMMEDIATE_TAP_EVENT receiver slot for puzzle task");
         idle().await
     };
 
     let mut machine = PuzzleStateMachine::new();
     let mut directions = DirectionsPuzzle::new(&directions::TEST_SEQUENCE);
     let mut waypoints = WaypointsPuzzle::new(&waypoints::TEST_WAYPOINTS);
+    let mut knock = KnockPuzzle::new(&knock::TEST_PATTERN);
 
     // Latest sensor values, so every event carries a full device state.
     let mut heading = 0u16;
     let mut position: Option<GpsPosition> = None;
 
-    // ponytail: single tap is a global open/close toggle, so it never reaches the
-    // FSM as puzzle input. The Knock puzzle PR will gate this on the active state.
+    // Knock timing.
+    let mut last_knock: Option<Instant> = None;
+    let mut knock_deadline: Option<Instant> = None;
+
+    // ponytail: single tap is a debug open/close toggle, gated off while the
+    // knock puzzle is active so knocks don't fling the servo around.
     let mut box_open = false;
 
     info!(
@@ -58,19 +69,30 @@ pub async fn run() -> ! {
     );
 
     loop {
-        let event = match select4(
-            heading_rx.changed(),
-            gps_rx.changed(),
-            tap_rx.changed(),
-            double_tap_rx.changed(),
+        // Fires only while a knock attempt is in progress.
+        let finalize = async {
+            match knock_deadline {
+                Some(d) => Timer::at(d).await,
+                None => core::future::pending::<()>().await,
+            }
+        };
+
+        let event = match select(
+            select4(
+                heading_rx.changed(),
+                gps_rx.changed(),
+                tap_rx.changed(),
+                knock_rx.changed(),
+            ),
+            finalize,
         )
         .await
         {
-            Either4::First(h) => {
+            Either::First(Either4::First(h)) => {
                 heading = h;
                 device_state_event(heading, position)
             }
-            Either4::Second(gps) => {
+            Either::First(Either4::Second(gps)) => {
                 // Only trust a position with a fix; drop it otherwise.
                 position = gps.has_fix.then_some(GpsPosition {
                     latitude: gps.latitude as f64,
@@ -81,7 +103,11 @@ pub async fn run() -> ! {
                 });
                 device_state_event(heading, position)
             }
-            Either4::Third(_) => {
+            Either::First(Either4::Third(_)) => {
+                // Single tap toggles the box, except mid-knock-puzzle.
+                if machine.current_puzzle() == PuzzleId::Knock {
+                    continue;
+                }
                 box_open = !box_open;
                 let pos = if box_open {
                     ServoPosition::Unlocked
@@ -92,14 +118,33 @@ pub async fn run() -> ! {
                 apply_action(Action::MoveServo(pos));
                 continue;
             }
-            Either4::Fourth(_) => PuzzleEvent::DoubleTap,
+            Either::First(Either4::Fourth(_)) => {
+                // Raw knock spike — only the knock puzzle cares.
+                if machine.current_puzzle() != PuzzleId::Knock {
+                    continue;
+                }
+                let now = Instant::now();
+                let gap = match last_knock {
+                    Some(prev) => (now - prev).as_millis().min(START_GAP as u64 - 1) as u16,
+                    None => START_GAP,
+                };
+                last_knock = Some(now);
+                knock_deadline = Some(now + KNOCK_FINALIZE);
+                PuzzleEvent::Tap { gap_ms: gap }
+            }
+            Either::Second(_) => {
+                // Quiet period elapsed: end the knock attempt.
+                knock_deadline = None;
+                last_knock = None;
+                PuzzleEvent::Timeout
+            }
         };
 
-        // Dispatch to the active puzzle. Knock lands in its own PR.
         let action = match machine.current_puzzle() {
             PuzzleId::Directions => machine.handle_event(&mut directions, event),
             PuzzleId::Waypoints => machine.handle_event(&mut waypoints, event),
-            PuzzleId::Knock | PuzzleId::Unlocked => None,
+            PuzzleId::Knock => machine.handle_event(&mut knock, event),
+            PuzzleId::Unlocked => None,
         };
 
         if let Some(action) = action {

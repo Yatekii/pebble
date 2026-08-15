@@ -11,8 +11,9 @@ pub enum PuzzleEvent {
     /// Device state has been updated (orientation, GPS, etc.).
     DeviceStateChanged(DeviceState),
 
-    /// A single tap/knock on the PCB was detected via the accelerometer.
-    Tap,
+    /// A knock on the PCB was detected. `gap_ms` is the time since the previous
+    /// knock, or [`u16::MAX`] for the first knock of a new attempt.
+    Tap { gap_ms: u16 },
 
     /// Two taps in quick succession were detected via the accelerometer.
     DoubleTap,
